@@ -1,0 +1,333 @@
+// Prisma Schema for US Payroll System
+// Database: SQLite (for development)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============ MODELS ============
+// Note: SQLite doesn't support enums, so we use String with validation in app code
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  role      String   @default("VIEWER") // ADMIN, ACCOUNTANT, MANAGER, VIEWER
+
+  // Multi-tenant: user can access multiple companies
+  companyAccess CompanyAccess[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model CompanyAccess {
+  id        String   @id @default(cuid())
+  userId    String
+  companyId String
+  role      String   @default("VIEWER")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, companyId])
+  @@map("company_access")
+}
+
+model Company {
+  id   String @id @default(cuid())
+  name String
+  ein  String @unique // Employer Identification Number (XX-XXXXXXX)
+
+  // Address
+  address String
+  city    String
+  state   String // 2-letter state code
+  zipCode String
+
+  // Contact
+  phone String?
+  email String?
+
+  // Payroll Settings
+  payFrequency String @default("BIWEEKLY") // WEEKLY, BIWEEKLY, SEMIMONTHLY, MONTHLY
+
+  // State Tax Registrations
+  stateUnemploymentId String?
+  stateWithholdingId  String?
+
+  // Employer Tax Rates
+  sutaRate Decimal? // State Unemployment Tax Rate (experience rating)
+
+  // Federal Tax Deposit Schedule (IRS Form 941)
+  // MONTHLY: If tax liability < $50,000 in lookback period
+  // SEMIWEEKLY: If tax liability >= $50,000 in lookback period
+  federalDepositSchedule String @default("MONTHLY") // MONTHLY, SEMIWEEKLY
+
+  // Retirement (401k) match settings
+  retirement401kMatchRate         Decimal? // % of employee contribution matched
+  retirement401kMatchLimitPercent Decimal? // Max employee contribution % of pay eligible for match
+
+  isActive Boolean @default(true)
+
+  // Relations
+  employees   Employee[]
+  payrolls    Payroll[]
+  payPeriods  PayPeriod[]
+  userAccess  CompanyAccess[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("companies")
+}
+
+model Employee {
+  id        String @id @default(cuid())
+  companyId String
+
+  // Personal Info
+  firstName   String
+  lastName    String
+  email       String
+  ssn         String  // Encrypted: XXX-XX-XXXX
+  ssnHash     String? @unique // HMAC-SHA256 hash for duplicate detection
+  dateOfBirth DateTime
+
+  // Employment
+  hireDate        DateTime
+  terminationDate DateTime?
+  department      String?
+  jobTitle        String?
+  isActive        Boolean  @default(true)
+
+  // Compensation
+  payType String  // HOURLY, SALARY
+  payRate Decimal // Hourly rate or annual salary
+
+  // W-4 Information (2020+ form)
+  filingStatus          String  @default("SINGLE") // SINGLE, MARRIED_FILING_JOINTLY, etc.
+  allowances            Int     @default(0)  // Step 3 dependents
+  additionalWithholding Decimal @default(0)  // Step 4(c)
+  otherIncome           Decimal @default(0)  // Step 4(a)
+  deductions            Decimal @default(0)  // Step 4(b)
+
+  // Retirement (401k)
+  retirement401kType   String?  // PERCENT or FIXED
+  retirement401kRate   Decimal? // Percent of gross pay
+  retirement401kAmount Decimal? // Flat amount per pay period
+
+  // Address (for state tax purposes)
+  address String
+  city    String
+  county  String?
+  state   String // 2-letter state code
+  zipCode String
+
+  // Work location (may differ from home address)
+  workState String?
+  workCity  String?
+  localResident Boolean @default(true)
+
+  // Direct Deposit (encrypted in application layer)
+  bankRoutingNumber String? // Encrypted with AES-256-GCM
+  bankAccountNumber String? // Encrypted with AES-256-GCM
+  bankAccountType   String? // CHECKING or SAVINGS (not sensitive)
+
+  // Relations
+  company  Company   @relation(fields: [companyId], references: [id])
+  payrolls Payroll[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([lastName, firstName])
+  @@map("employees")
+}
+
+model PayPeriod {
+  id        String @id @default(cuid())
+  companyId String
+
+  startDate DateTime
+  endDate   DateTime
+  payDate   DateTime
+
+  status    String @default("DRAFT") // DRAFT, PENDING, PROCESSED, PAID, VOID
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  payrolls Payroll[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, startDate])
+  @@map("pay_periods")
+}
+
+model Payroll {
+  id          String @id @default(cuid())
+  employeeId  String
+  companyId   String
+  payPeriodId String?
+
+  // Pay Period
+  payPeriodStart DateTime
+  payPeriodEnd   DateTime
+  payDate        DateTime
+
+  // Hours
+  regularHours  Decimal @default(0)
+  overtimeHours Decimal @default(0)
+
+  // Earnings
+  regularPay  Decimal
+  overtimePay Decimal @default(0)
+  bonus       Decimal @default(0)
+  commission  Decimal @default(0)
+
+  // Tips
+  creditCardTips  Decimal @default(0)  // Tips paid through credit card (employer distributes)
+  cashTips        Decimal @default(0)  // Cash tips reported by employee (for tax withholding)
+
+  grossPay    Decimal
+
+  // Federal Taxes
+  federalWithholding Decimal
+  socialSecurity     Decimal
+  medicare           Decimal
+
+  // State Taxes (Employee)
+  stateWithholding  Decimal @default(0)
+  stateDisability   Decimal @default(0) // SDI
+  stateUnemployment Decimal @default(0) // SUI employee portion
+
+  // Local Taxes
+  localWithholding Decimal @default(0)
+
+  // Employer Taxes
+  employerFuta         Decimal @default(0) // Federal Unemployment Tax
+  employerSuta         Decimal @default(0) // State Unemployment Tax
+  employerSocialSecurity Decimal @default(0) // Employer SS match
+  employerMedicare     Decimal @default(0) // Employer Medicare match
+  totalEmployerTax     Decimal @default(0) // Total employer taxes
+
+  // Employer Contributions
+  employer401kMatch Decimal @default(0)
+
+  // Deductions (pre-tax)
+  retirement401k  Decimal @default(0)
+  healthInsurance Decimal @default(0)
+  hsaContribution Decimal @default(0)
+
+  // Deductions (post-tax)
+  otherDeductions Decimal @default(0)
+  garnishments    Decimal @default(0)
+
+  // Totals
+  totalDeductions Decimal
+  netPay          Decimal
+  reimbursements  Decimal @default(0) // Non-taxable
+
+  // Status
+  status String @default("PROCESSED")
+
+  // YTD Totals (at time of this payroll)
+  ytdGrossPay       Decimal @default(0)
+  ytdFederalTax     Decimal @default(0)
+  ytdSocialSecurity Decimal @default(0)
+  ytdMedicare       Decimal @default(0)
+  ytdStateTax       Decimal @default(0)
+  ytdNetPay         Decimal @default(0)
+
+  // Relations
+  employee  Employee   @relation(fields: [employeeId], references: [id])
+  company   Company    @relation(fields: [companyId], references: [id])
+  payPeriod PayPeriod? @relation(fields: [payPeriodId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, payPeriodStart, payPeriodEnd]) // Prevent duplicate payrolls for same period
+  @@index([employeeId, payDate])
+  @@index([companyId, payDate])
+  @@map("payrolls")
+}
+
+// Audit Log for tracking sensitive data access
+// Records: who accessed what, when, and from where
+model AuditLog {
+  id        String   @id @default(cuid())
+
+  // Who performed the action
+  userId    String?  // null for system actions
+  userEmail String?  // Denormalized for quick access
+  userRole  String?  // Role at time of action
+
+  // What was accessed/modified
+  action      String   // VIEW, CREATE, UPDATE, DELETE, EXPORT, LOGIN, LOGOUT
+  resource    String   // EMPLOYEE, PAYROLL, COMPANY, USER, SSN, BANK_ACCOUNT
+  resourceId  String?  // ID of the specific resource
+  companyId   String?  // For multi-tenant filtering
+
+  // Details
+  description String?  // Human-readable description
+  metadata    String?  // JSON string for additional context
+
+  // Where (client info)
+  ipAddress   String?
+  userAgent   String?
+
+  // Outcome
+  success     Boolean  @default(true)
+  errorMessage String?
+
+  // When
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([resource])
+  @@index([resourceId])
+  @@index([companyId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// Payroll Lock for concurrency control
+// Prevents duplicate payroll runs for the same company and pay period
+model PayrollLock {
+  id        String   @id @default(cuid())
+
+  // Lock identifier: companyId + payPeriodStart + payPeriodEnd
+  companyId      String
+  payPeriodStart DateTime
+  payPeriodEnd   DateTime
+
+  // Lock metadata
+  lockedBy       String   // userId who initiated the lock
+  lockedAt       DateTime @default(now())
+  expiresAt      DateTime // Auto-expire stale locks (e.g., 10 minutes)
+
+  // Status
+  status         String   @default("ACTIVE") // ACTIVE, COMPLETED, EXPIRED, FAILED
+
+  // Idempotency key for duplicate request detection
+  idempotencyKey String   @unique
+
+  @@unique([companyId, payPeriodStart, payPeriodEnd, status])
+  @@index([expiresAt])
+  @@map("payroll_locks")
+}

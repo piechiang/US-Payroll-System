@@ -1,0 +1,724 @@
+import { Router, Response } from 'express';
+import { prisma } from '../index.js';
+import { z } from 'zod';
+import { AuthRequest, filterByAccessibleCompanies, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
+import { encrypt, decrypt, maskSSN, hashSSN, isEncrypted, encryptIfNeeded } from '../services/encryption.js';
+import { MARYLAND_LOCAL_TAX_INFO } from '../tax/local/baltimore.js';
+import { logEmployeeAccess, logSensitiveAccess } from '../services/auditLog.js';
+
+// Valid Maryland counties for validation
+const VALID_MD_COUNTIES = Object.keys(MARYLAND_LOCAL_TAX_INFO.rates);
+
+function normalizeOptionalString(value: unknown) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+const optionalTrimmedString = z.preprocess(normalizeOptionalString, z.string().optional());
+const optionalTrimmedState = z.preprocess(
+  normalizeOptionalString,
+  z.string().length(2).optional()
+);
+const optional401kType = z.preprocess(
+  (value) => value === '' ? null : value,
+  z.enum(['PERCENT', 'FIXED']).nullable().optional()
+);
+
+/**
+ * Validate Maryland county name
+ * Returns normalized county name if valid, null otherwise
+ */
+function validateMarylandCounty(county: string | undefined | null): string | null {
+  if (!county) return null;
+
+  const normalizedCounty = county.toUpperCase().trim();
+
+  // Check if county exists in valid list
+  if (VALID_MD_COUNTIES.includes(normalizedCounty)) {
+    return normalizedCounty;
+  }
+
+  // Try common variations
+  const variations: Record<string, string> = {
+    'PRINCE GEORGE\'S': 'PRINCE GEORGES',
+    'PRINCE GEORGE': 'PRINCE GEORGES',
+    'ST. MARY\'S': 'ST MARYS',
+    'ST MARY\'S': 'ST MARYS',
+    'QUEEN ANNE\'S': 'QUEEN ANNES',
+    'QUEEN ANNE': 'QUEEN ANNES',
+  };
+
+  const mapped = variations[normalizedCounty];
+  if (mapped && VALID_MD_COUNTIES.includes(mapped)) {
+    return mapped;
+  }
+
+  return null;
+}
+
+const router = Router();
+
+// Helper to mask sensitive data in employee response
+function maskEmployeeData(employee: any) {
+  if (!employee) return employee;
+
+  let maskedBankAccount = null;
+  if (employee.bankAccountNumber) {
+    try {
+      // Try to decrypt if encrypted, otherwise use as-is
+      const plainAccount = isEncrypted(employee.bankAccountNumber)
+        ? decrypt(employee.bankAccountNumber)
+        : employee.bankAccountNumber;
+      maskedBankAccount = `****${plainAccount.slice(-4)}`;
+    } catch {
+      // If decryption fails, just show masked placeholder
+      maskedBankAccount = '****';
+    }
+  }
+
+  let maskedBankRouting = null;
+  if (employee.bankRoutingNumber) {
+    try {
+      // Try to decrypt if encrypted, otherwise use as-is
+      const plainRouting = isEncrypted(employee.bankRoutingNumber)
+        ? decrypt(employee.bankRoutingNumber)
+        : employee.bankRoutingNumber;
+      // Show last 4 digits of routing number
+      maskedBankRouting = `****${plainRouting.slice(-4)}`;
+    } catch {
+      // If decryption fails, just show masked placeholder
+      maskedBankRouting = '****';
+    }
+  }
+
+  return {
+    ...employee,
+    ssn: maskSSN(employee.ssn),
+    bankAccountNumber: maskedBankAccount,
+    bankRoutingNumber: maskedBankRouting,
+  };
+}
+
+// Helper to mask array of employees
+function maskEmployeesData(employees: any[]) {
+  return employees.map(maskEmployeeData);
+}
+
+// Pay rate limits for validation
+// These are reasonable upper bounds to catch data entry errors
+// while still allowing legitimate high earners
+const PAY_RATE_LIMITS = {
+  HOURLY: {
+    max: 1000,  // $1000/hour max (e.g., high-end consultants)
+    errorMessage: 'Hourly rate cannot exceed $1,000/hour'
+  },
+  SALARY: {
+    max: 10000000,  // $10M/year max (reasonable for executives)
+    errorMessage: 'Annual salary cannot exceed $10,000,000'
+  }
+};
+
+// Base validation schema (without refinements)
+const baseEmployeeSchema = z.object({
+  firstName: z.string().min(1),
+  lastName: z.string().min(1),
+  email: z.string().email(),
+  ssn: z.string().regex(/^\d{3}-\d{2}-\d{4}$/, 'SSN must be in format XXX-XX-XXXX'),
+  dateOfBirth: z.string().transform(str => new Date(str)),
+  hireDate: z.string().transform(str => new Date(str)),
+  department: optionalTrimmedString,
+  jobTitle: optionalTrimmedString,
+
+  // Compensation
+  payType: z.enum(['HOURLY', 'SALARY']),
+  payRate: z.number().positive(),
+
+  // W-4 Information
+  filingStatus: z.enum(['SINGLE', 'MARRIED_FILING_JOINTLY', 'MARRIED_FILING_SEPARATELY', 'HEAD_OF_HOUSEHOLD']),
+  allowances: z.number().int().min(0).default(0),
+  additionalWithholding: z.number().min(0).default(0),
+  otherIncome: z.number().min(0).default(0),
+  deductions: z.number().min(0).default(0),
+
+  // Retirement (401k)
+  retirement401kType: optional401kType,
+  retirement401kRate: z.number().min(0).max(100).nullable().optional(),
+  retirement401kAmount: z.number().min(0).nullable().optional(),
+
+  // Address
+  address: z.string(),
+  city: z.string(),
+  county: optionalTrimmedString,
+  state: z.string().length(2),
+  zipCode: z.string(),
+
+  // Work location (for local taxes)
+  workCity: optionalTrimmedString,
+  workState: optionalTrimmedState,
+  localResident: z.boolean().optional().default(true),
+
+  // Direct Deposit (optional)
+  bankRoutingNumber: z.preprocess(
+    normalizeOptionalString,
+    z.string().regex(/^\d{9}$/, 'Routing number must be 9 digits').optional()
+  ),
+  bankAccountNumber: z.preprocess(
+    normalizeOptionalString,
+    z.string().min(4).max(17).optional()
+  ),
+  bankAccountType: z.preprocess(
+    normalizeOptionalString,
+    z.enum(['CHECKING', 'SAVINGS']).optional()
+  ),
+
+  companyId: z.string()
+});
+
+// Refinement function for work location and 401k validation
+function employeeRefinements(data: z.infer<typeof baseEmployeeSchema>, ctx: z.RefinementCtx) {
+  const hasWorkCity = Boolean(data.workCity);
+  const hasWorkState = Boolean(data.workState);
+
+  if (hasWorkCity && !hasWorkState) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workState'],
+      message: 'Work state is required when work city is provided'
+    });
+  }
+
+  if (hasWorkState && !hasWorkCity) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workCity'],
+      message: 'Work city is required when work state is provided'
+    });
+  }
+
+  const retirement401kType = data.retirement401kType ?? undefined;
+  const retirement401kRate = data.retirement401kRate ?? undefined;
+  const retirement401kAmount = data.retirement401kAmount ?? undefined;
+
+  if (!retirement401kType) {
+    if ((retirement401kRate ?? 0) > 0 || (retirement401kAmount ?? 0) > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['retirement401kType'],
+        message: '401(k) type is required when a contribution is provided'
+      });
+    }
+  } else if (retirement401kType === 'PERCENT') {
+    if (retirement401kRate === undefined || retirement401kRate === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['retirement401kRate'],
+        message: '401(k) rate is required for percent-based contributions'
+      });
+    }
+    if ((retirement401kAmount ?? 0) > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['retirement401kAmount'],
+        message: 'Do not set a flat amount when using percent-based contributions'
+      });
+    }
+  } else if (retirement401kType === 'FIXED') {
+    if (retirement401kAmount === undefined || retirement401kAmount === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['retirement401kAmount'],
+        message: '401(k) amount is required for flat contributions'
+      });
+    }
+    if ((retirement401kRate ?? 0) > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['retirement401kRate'],
+        message: 'Do not set a percent rate when using flat contributions'
+      });
+    }
+  }
+}
+
+// Create schema with refinements
+const createEmployeeSchema = baseEmployeeSchema.superRefine(employeeRefinements);
+
+// Update schema - partial base without refinements (validation done in route handler)
+const updateEmployeeSchema = baseEmployeeSchema.partial();
+
+// GET /api/employees - List employees with pagination
+// Multi-tenant: Only returns employees from accessible companies
+// Query params: page (1-based), limit (default 50, max 100), companyId, search
+router.get('/', async (req: AuthRequest, res: Response) => {
+  try {
+    const { companyId, search } = req.query;
+
+    // Pagination parameters
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 50));
+    const skip = (page - 1) * limit;
+
+    // Build where clause with multi-tenant filter
+    const baseFilter = filterByAccessibleCompanies(req);
+    let whereClause: Record<string, unknown> = companyId
+      ? { ...baseFilter, companyId: String(companyId) }
+      : baseFilter;
+
+    // Add search filter if provided
+    if (search && typeof search === 'string' && search.trim()) {
+      const searchTerm = search.trim();
+      whereClause = {
+        ...whereClause,
+        OR: [
+          { firstName: { contains: searchTerm } },
+          { lastName: { contains: searchTerm } },
+          { email: { contains: searchTerm } },
+          { department: { contains: searchTerm } },
+          { jobTitle: { contains: searchTerm } }
+        ]
+      };
+    }
+
+    // Run count and find in parallel
+    const [total, employees] = await Promise.all([
+      prisma.employee.count({
+        where: Object.keys(whereClause).length > 0 ? whereClause : undefined
+      }),
+      prisma.employee.findMany({
+        where: Object.keys(whereClause).length > 0 ? whereClause : undefined,
+        include: {
+          company: {
+            select: { name: true }
+          }
+        },
+        orderBy: { lastName: 'asc' },
+        skip,
+        take: limit
+      })
+    ]);
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(total / limit);
+
+    // Return paginated response
+    res.json({
+      data: maskEmployeesData(employees),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching employees:', error);
+    res.status(500).json({ error: 'Failed to fetch employees' });
+  }
+});
+
+// GET /api/employees/:id - Get single employee
+// Multi-tenant: Verifies user has access to the employee's company
+router.get('/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const employee = await prisma.employee.findUnique({
+      where: { id: req.params.id },
+      include: {
+        company: true,
+        payrolls: {
+          take: 10,
+          orderBy: { payDate: 'desc' }
+        }
+      }
+    });
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Multi-tenant check: verify access to this employee's company
+    // SECURITY: Uses hasCompanyAccess which properly handles empty accessibleCompanyIds
+    if (!hasCompanyAccess(req, employee.companyId)) {
+      return res.status(403).json({ error: 'Access denied to this employee' });
+    }
+
+    // Audit log: record access to employee record (contains SSN and bank info)
+    logEmployeeAccess(req, 'VIEW', employee.id, employee.companyId);
+    if (employee.ssn) {
+      logSensitiveAccess(req, 'EMPLOYEE_SSN', employee.id, employee.companyId);
+    }
+    if (employee.bankAccountNumber) {
+      logSensitiveAccess(req, 'EMPLOYEE_BANK', employee.id, employee.companyId);
+    }
+
+    // Mask sensitive data before sending
+    res.json(maskEmployeeData(employee));
+  } catch (error) {
+    console.error('Error fetching employee:', error);
+    res.status(500).json({ error: 'Failed to fetch employee' });
+  }
+});
+
+// POST /api/employees - Create new employee
+// Multi-tenant: Verifies user has access to the target company
+// Role restriction: Only ADMIN, ACCOUNTANT, or MANAGER can create employees
+router.post('/', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+  try {
+    const data = createEmployeeSchema.parse(req.body);
+
+    // Multi-tenant check: verify access to target company
+    // SECURITY: Uses hasCompanyAccess which properly handles empty accessibleCompanyIds
+    if (!hasCompanyAccess(req, data.companyId)) {
+      return res.status(403).json({ error: 'Access denied to this company' });
+    }
+
+    // Validate pay rate limits based on pay type
+    const payLimit = PAY_RATE_LIMITS[data.payType];
+    if (data.payRate > payLimit.max) {
+      return res.status(400).json({
+        error: 'Invalid pay rate',
+        message: payLimit.errorMessage,
+        maxAllowed: payLimit.max,
+        payType: data.payType
+      });
+    }
+
+    // Validate Maryland county requirement
+    // MD employees must have a valid county for local tax calculation
+    if (data.state === 'MD') {
+      if (!data.county) {
+        return res.status(400).json({
+          error: 'County required for Maryland employees',
+          message: 'Maryland local tax calculation requires a valid county',
+          validCounties: VALID_MD_COUNTIES
+        });
+      }
+
+      const validatedCounty = validateMarylandCounty(data.county);
+      if (!validatedCounty) {
+        return res.status(400).json({
+          error: 'Invalid Maryland county',
+          message: `"${data.county}" is not a valid Maryland county`,
+          validCounties: VALID_MD_COUNTIES
+        });
+      }
+
+      // Use normalized county name
+      data.county = validatedCounty;
+    }
+
+    // Generate SSN hash for uniqueness check (efficient O(1) lookup via unique index)
+    const ssnHashValue = hashSSN(data.ssn);
+
+    // Check if SSN already exists using the hash (unique index makes this efficient)
+    const existingEmployee = await prisma.employee.findUnique({
+      where: { ssnHash: ssnHashValue },
+      select: { id: true }
+    });
+
+    if (existingEmployee) {
+      return res.status(400).json({ error: 'Employee with this SSN already exists' });
+    }
+
+    // Encrypt SSN before storing
+    const encryptedSSN = encrypt(data.ssn);
+
+    // Encrypt bank details if provided
+    const encryptedBankAccount = data.bankAccountNumber
+      ? encrypt(data.bankAccountNumber)
+      : undefined;
+    const encryptedBankRouting = data.bankRoutingNumber
+      ? encrypt(data.bankRoutingNumber)
+      : undefined;
+
+    const employee = await prisma.employee.create({
+      data: {
+        ...data,
+        ssn: encryptedSSN,                        // Store encrypted SSN
+        ssnHash: ssnHashValue,                    // Store hash for duplicate detection
+        bankAccountNumber: encryptedBankAccount,  // Store encrypted bank account
+        bankRoutingNumber: encryptedBankRouting,  // Store encrypted routing number
+        isActive: true
+      }
+    });
+
+    // Audit log: record employee creation
+    logEmployeeAccess(req, 'CREATE', employee.id, employee.companyId, {
+      firstName: data.firstName,
+      lastName: data.lastName,
+    });
+
+    // Return masked data
+    res.status(201).json(maskEmployeeData(employee));
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: error.errors });
+    }
+    console.error('Error creating employee:', error);
+    res.status(500).json({ error: 'Failed to create employee' });
+  }
+});
+
+// PUT /api/employees/:id - Update employee
+// Multi-tenant: Verifies user has access to the employee's company
+// Role restriction: Only ADMIN, ACCOUNTANT, or MANAGER can update employees
+router.put('/:id', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+  try {
+    const data = updateEmployeeSchema.parse(req.body);
+
+    // First fetch the employee to check company access and current state
+    const existingEmployee = await prisma.employee.findUnique({
+      where: { id: req.params.id },
+      select: {
+        companyId: true,
+        state: true,
+        county: true,
+        workCity: true,
+        workState: true,
+        retirement401kType: true,
+        retirement401kRate: true,
+        retirement401kAmount: true
+      }
+    });
+
+    if (!existingEmployee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Multi-tenant check
+    // SECURITY: Uses hasCompanyAccess which properly handles empty accessibleCompanyIds
+    if (!hasCompanyAccess(req, existingEmployee.companyId)) {
+      return res.status(403).json({ error: 'Access denied to this employee' });
+    }
+    // Also check target company if changing
+    if (data.companyId && !hasCompanyAccess(req, data.companyId)) {
+      return res.status(403).json({ error: 'Access denied to target company' });
+    }
+
+    // Validate pay rate limits if pay rate or pay type is being updated
+    if (data.payRate !== undefined || data.payType !== undefined) {
+      // Need to get current employee data to check combined values
+      const currentEmployee = await prisma.employee.findUnique({
+        where: { id: req.params.id },
+        select: { payType: true, payRate: true }
+      });
+
+      if (currentEmployee) {
+        const effectivePayType = data.payType || currentEmployee.payType;
+        const effectivePayRate = data.payRate !== undefined ? data.payRate : Number(currentEmployee.payRate);
+        const payLimit = PAY_RATE_LIMITS[effectivePayType as keyof typeof PAY_RATE_LIMITS];
+
+        if (effectivePayRate > payLimit.max) {
+          return res.status(400).json({
+            error: 'Invalid pay rate',
+            message: payLimit.errorMessage,
+            maxAllowed: payLimit.max,
+            payType: effectivePayType
+          });
+        }
+      }
+    }
+
+    // Validate Maryland county requirement
+    // Check if the resulting state will be MD (either updating to MD or already MD)
+    const resultingState = data.state || existingEmployee.state;
+    const resultingCounty = data.county !== undefined ? data.county : existingEmployee.county;
+
+    if (resultingState === 'MD') {
+      if (!resultingCounty) {
+        return res.status(400).json({
+          error: 'County required for Maryland employees',
+          message: 'Maryland local tax calculation requires a valid county',
+          validCounties: VALID_MD_COUNTIES
+        });
+      }
+
+      const validatedCounty = validateMarylandCounty(resultingCounty);
+      if (!validatedCounty) {
+        return res.status(400).json({
+          error: 'Invalid Maryland county',
+          message: `"${resultingCounty}" is not a valid Maryland county`,
+          validCounties: VALID_MD_COUNTIES
+        });
+      }
+
+      // If county is being updated, use normalized name
+      if (data.county !== undefined) {
+        data.county = validatedCounty;
+      }
+    }
+
+    const resultingWorkCity = data.workCity !== undefined ? data.workCity : existingEmployee.workCity;
+    const resultingWorkState = data.workState !== undefined ? data.workState : existingEmployee.workState;
+    const hasWorkCity = Boolean(resultingWorkCity);
+    const hasWorkState = Boolean(resultingWorkState);
+    if (hasWorkCity && !hasWorkState) {
+      return res.status(400).json({
+        error: 'Missing work state',
+        message: 'Work state is required when work city is provided'
+      });
+    }
+    if (hasWorkState && !hasWorkCity) {
+      return res.status(400).json({
+        error: 'Missing work city',
+        message: 'Work city is required when work state is provided'
+      });
+    }
+
+    if (data.retirement401kType === null) {
+      data.retirement401kRate = null;
+      data.retirement401kAmount = null;
+    }
+
+    const resulting401kType =
+      data.retirement401kType !== undefined
+        ? data.retirement401kType
+        : existingEmployee.retirement401kType;
+    const resulting401kRate =
+      data.retirement401kRate !== undefined
+        ? data.retirement401kRate
+        : existingEmployee.retirement401kRate;
+    const resulting401kAmount =
+      data.retirement401kAmount !== undefined
+        ? data.retirement401kAmount
+        : existingEmployee.retirement401kAmount;
+
+    const normalized401kType = resulting401kType ?? undefined;
+    const normalized401kRate = Number(resulting401kRate ?? 0);
+    const normalized401kAmount = Number(resulting401kAmount ?? 0);
+
+    if (!normalized401kType) {
+      if (normalized401kRate > 0 || normalized401kAmount > 0) {
+        return res.status(400).json({
+          error: 'Missing 401(k) type',
+          message: '401(k) type is required when a contribution is provided'
+        });
+      }
+    } else if (normalized401kType === 'PERCENT') {
+      if (resulting401kRate === undefined || resulting401kRate === null) {
+        return res.status(400).json({
+          error: 'Missing 401(k) rate',
+          message: '401(k) rate is required for percent-based contributions'
+        });
+      }
+      if (normalized401kAmount > 0) {
+        return res.status(400).json({
+          error: 'Invalid 401(k) amount',
+          message: 'Do not set a flat amount when using percent-based contributions'
+        });
+      }
+    } else if (normalized401kType === 'FIXED') {
+      if (resulting401kAmount === undefined || resulting401kAmount === null) {
+        return res.status(400).json({
+          error: 'Missing 401(k) amount',
+          message: '401(k) amount is required for flat contributions'
+        });
+      }
+      if (normalized401kRate > 0) {
+        return res.status(400).json({
+          error: 'Invalid 401(k) rate',
+          message: 'Do not set a percent rate when using flat contributions'
+        });
+      }
+    }
+
+    // Prepare update data with encryption for sensitive fields
+    const updateData: any = { ...data };
+
+    // Encrypt SSN if being updated, and update the hash
+    // Note: SSN updates should always be new plain values, not re-encrypted
+    if (updateData.ssn && data.ssn) {
+      // Validate SSN format before encrypting
+      if (!isEncrypted(data.ssn)) {
+        updateData.ssn = encrypt(data.ssn);
+        updateData.ssnHash = hashSSN(data.ssn);
+      } else {
+        // Already encrypted - this shouldn't happen with proper API usage
+        // Remove from update to prevent double encryption
+        delete updateData.ssn;
+      }
+    }
+
+    // Encrypt bank details if being updated
+    // Use encryptIfNeeded to handle both plain and already-encrypted values
+    if (updateData.bankAccountNumber) {
+      updateData.bankAccountNumber = encryptIfNeeded(updateData.bankAccountNumber);
+    }
+    if (updateData.bankRoutingNumber) {
+      updateData.bankRoutingNumber = encryptIfNeeded(updateData.bankRoutingNumber);
+    }
+
+    const employee = await prisma.employee.update({
+      where: { id: req.params.id },
+      data: updateData
+    });
+
+    // Audit log: record employee update
+    const updatedFields = Object.keys(data).filter(k => k !== 'ssn' && k !== 'bankAccountNumber' && k !== 'bankRoutingNumber');
+    logEmployeeAccess(req, 'UPDATE', employee.id, employee.companyId, {
+      updatedFields,
+    });
+    // Log sensitive field updates separately
+    if (data.ssn) {
+      logSensitiveAccess(req, 'EMPLOYEE_SSN', employee.id, employee.companyId, 'UPDATE');
+    }
+    if (data.bankAccountNumber || data.bankRoutingNumber) {
+      logSensitiveAccess(req, 'EMPLOYEE_BANK', employee.id, employee.companyId, 'UPDATE');
+    }
+
+    // Return masked data
+    res.json(maskEmployeeData(employee));
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: error.errors });
+    }
+    console.error('Error updating employee:', error);
+    res.status(500).json({ error: 'Failed to update employee' });
+  }
+});
+
+// DELETE /api/employees/:id - Soft delete (deactivate) employee
+// Multi-tenant: Verifies user has access to the employee's company
+// Role restriction: Only ADMIN or MANAGER can deactivate employees
+router.delete('/:id', authorizeRoles('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+  try {
+    // First fetch the employee to check company access
+    const existingEmployee = await prisma.employee.findUnique({
+      where: { id: req.params.id },
+      select: { companyId: true }
+    });
+
+    if (!existingEmployee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Multi-tenant check
+    // SECURITY: Uses hasCompanyAccess which properly handles empty accessibleCompanyIds
+    if (!hasCompanyAccess(req, existingEmployee.companyId)) {
+      return res.status(403).json({ error: 'Access denied to this employee' });
+    }
+
+    const employee = await prisma.employee.update({
+      where: { id: req.params.id },
+      data: {
+        isActive: false,
+        terminationDate: new Date()
+      }
+    });
+
+    // Audit log: record employee deactivation
+    logEmployeeAccess(req, 'DELETE', employee.id, employee.companyId, {
+      terminationDate: new Date().toISOString(),
+    });
+
+    // Return masked data (employee may contain sensitive info)
+    res.json({ message: 'Employee deactivated', employee: maskEmployeeData(employee) });
+  } catch (error) {
+    console.error('Error deactivating employee:', error);
+    res.status(500).json({ error: 'Failed to deactivate employee' });
+  }
+});
+
+export default router;

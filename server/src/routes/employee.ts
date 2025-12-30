@@ -1,30 +1,19 @@
 import { Router, Response } from 'express';
 import { prisma } from '../index.js';
 import { z } from 'zod';
+import multer from 'multer';
+import path from 'path';
+import * as XLSX from 'xlsx';
 import { AuthRequest, filterByAccessibleCompanies, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
 import { encrypt, decrypt, maskSSN, hashSSN, isEncrypted, encryptIfNeeded } from '../services/encryption.js';
+import { createEmployeeSchema, updateEmployeeSchema } from '../services/employeeSchema.js';
+import { EMPLOYEE_IMPORT_HEADERS, parseEmployeeImportFile } from '../services/employeeImport.js';
 import { MARYLAND_LOCAL_TAX_INFO } from '../tax/local/baltimore.js';
 import { logEmployeeAccess, logSensitiveAccess } from '../services/auditLog.js';
 import { logger } from '../services/logger.js';
 
 // Valid Maryland counties for validation
 const VALID_MD_COUNTIES = Object.keys(MARYLAND_LOCAL_TAX_INFO.rates);
-
-function normalizeOptionalString(value: unknown) {
-  if (typeof value !== 'string') return value;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-const optionalTrimmedString = z.preprocess(normalizeOptionalString, z.string().optional());
-const optionalTrimmedState = z.preprocess(
-  normalizeOptionalString,
-  z.string().length(2).optional()
-);
-const optional401kType = z.preprocess(
-  (value) => value === '' ? null : value,
-  z.enum(['PERCENT', 'FIXED']).nullable().optional()
-);
 
 /**
  * Validate Maryland county name
@@ -59,6 +48,58 @@ function validateMarylandCounty(county: string | undefined | null): string | nul
 }
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage() });
+
+function formatDate(value: Date | string | null | undefined): string {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+function escapeCsv(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const stringValue = String(value);
+  if (/["\n,]/.test(stringValue)) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+  return stringValue;
+}
+
+function getExportRows(employees: any[]) {
+  return employees.map((employee) => ({
+    firstName: employee.firstName,
+    lastName: employee.lastName,
+    email: employee.email,
+    ssn: employee.ssn,
+    dateOfBirth: formatDate(employee.dateOfBirth),
+    hireDate: formatDate(employee.hireDate),
+    department: employee.department ?? '',
+    jobTitle: employee.jobTitle ?? '',
+    payType: employee.payType,
+    payRate: employee.payRate,
+    filingStatus: employee.filingStatus,
+    allowances: employee.allowances,
+    additionalWithholding: employee.additionalWithholding,
+    otherIncome: employee.otherIncome,
+    deductions: employee.deductions,
+    retirement401kType: employee.retirement401kType ?? '',
+    retirement401kRate: employee.retirement401kRate ?? '',
+    retirement401kAmount: employee.retirement401kAmount ?? '',
+    address: employee.address,
+    city: employee.city,
+    county: employee.county ?? '',
+    state: employee.state,
+    zipCode: employee.zipCode,
+    workCity: employee.workCity ?? '',
+    workState: employee.workState ?? '',
+    localResident: employee.localResident ?? '',
+    bankRoutingNumber: employee.bankRoutingNumber ?? '',
+    bankAccountNumber: employee.bankAccountNumber ?? '',
+    bankAccountType: employee.bankAccountType ?? '',
+    companyId: employee.companyId
+  }));
+}
 
 // Helper to mask sensitive data in employee response
 function maskEmployeeData(employee: any) {
@@ -119,134 +160,6 @@ const PAY_RATE_LIMITS = {
     errorMessage: 'Annual salary cannot exceed $10,000,000'
   }
 };
-
-// Base validation schema (without refinements)
-const baseEmployeeSchema = z.object({
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
-  email: z.string().email(),
-  ssn: z.string().regex(/^\d{3}-\d{2}-\d{4}$/, 'SSN must be in format XXX-XX-XXXX'),
-  dateOfBirth: z.string().transform(str => new Date(str)),
-  hireDate: z.string().transform(str => new Date(str)),
-  department: optionalTrimmedString,
-  jobTitle: optionalTrimmedString,
-
-  // Compensation
-  payType: z.enum(['HOURLY', 'SALARY']),
-  payRate: z.number().positive(),
-
-  // W-4 Information
-  filingStatus: z.enum(['SINGLE', 'MARRIED_FILING_JOINTLY', 'MARRIED_FILING_SEPARATELY', 'HEAD_OF_HOUSEHOLD']),
-  allowances: z.number().int().min(0).default(0),
-  additionalWithholding: z.number().min(0).default(0),
-  otherIncome: z.number().min(0).default(0),
-  deductions: z.number().min(0).default(0),
-
-  // Retirement (401k)
-  retirement401kType: optional401kType,
-  retirement401kRate: z.number().min(0).max(100).nullable().optional(),
-  retirement401kAmount: z.number().min(0).nullable().optional(),
-
-  // Address
-  address: z.string(),
-  city: z.string(),
-  county: optionalTrimmedString,
-  state: z.string().length(2),
-  zipCode: z.string(),
-
-  // Work location (for local taxes)
-  workCity: optionalTrimmedString,
-  workState: optionalTrimmedState,
-  localResident: z.boolean().optional().default(true),
-
-  // Direct Deposit (optional)
-  bankRoutingNumber: z.preprocess(
-    normalizeOptionalString,
-    z.string().regex(/^\d{9}$/, 'Routing number must be 9 digits').optional()
-  ),
-  bankAccountNumber: z.preprocess(
-    normalizeOptionalString,
-    z.string().min(4).max(17).optional()
-  ),
-  bankAccountType: z.preprocess(
-    normalizeOptionalString,
-    z.enum(['CHECKING', 'SAVINGS']).optional()
-  ),
-
-  companyId: z.string()
-});
-
-// Refinement function for work location and 401k validation
-function employeeRefinements(data: z.infer<typeof baseEmployeeSchema>, ctx: z.RefinementCtx) {
-  const hasWorkCity = Boolean(data.workCity);
-  const hasWorkState = Boolean(data.workState);
-
-  if (hasWorkCity && !hasWorkState) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['workState'],
-      message: 'Work state is required when work city is provided'
-    });
-  }
-
-  if (hasWorkState && !hasWorkCity) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['workCity'],
-      message: 'Work city is required when work state is provided'
-    });
-  }
-
-  const retirement401kType = data.retirement401kType ?? undefined;
-  const retirement401kRate = data.retirement401kRate ?? undefined;
-  const retirement401kAmount = data.retirement401kAmount ?? undefined;
-
-  if (!retirement401kType) {
-    if ((retirement401kRate ?? 0) > 0 || (retirement401kAmount ?? 0) > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['retirement401kType'],
-        message: '401(k) type is required when a contribution is provided'
-      });
-    }
-  } else if (retirement401kType === 'PERCENT') {
-    if (retirement401kRate === undefined || retirement401kRate === null) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['retirement401kRate'],
-        message: '401(k) rate is required for percent-based contributions'
-      });
-    }
-    if ((retirement401kAmount ?? 0) > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['retirement401kAmount'],
-        message: 'Do not set a flat amount when using percent-based contributions'
-      });
-    }
-  } else if (retirement401kType === 'FIXED') {
-    if (retirement401kAmount === undefined || retirement401kAmount === null) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['retirement401kAmount'],
-        message: '401(k) amount is required for flat contributions'
-      });
-    }
-    if ((retirement401kRate ?? 0) > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['retirement401kRate'],
-        message: 'Do not set a percent rate when using flat contributions'
-      });
-    }
-  }
-}
-
-// Create schema with refinements
-const createEmployeeSchema = baseEmployeeSchema.superRefine(employeeRefinements);
-
-// Update schema - partial base without refinements (validation done in route handler)
-const updateEmployeeSchema = baseEmployeeSchema.partial();
 
 // GET /api/employees - List employees with pagination
 // Multi-tenant: Only returns employees from accessible companies
@@ -319,6 +232,217 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     res.status(500).json({ error: 'Failed to fetch employees' });
   }
 });
+
+// GET /api/employees/export - Export employees (CSV or XLSX)
+router.get('/export', async (req: AuthRequest, res: Response) => {
+  try {
+    const { companyId, search, format, template } = req.query;
+    const exportFormat = format === 'xlsx' ? 'xlsx' : 'csv';
+    const isTemplate = template === 'true' || template === '1';
+
+    const baseFilter = filterByAccessibleCompanies(req);
+    let whereClause: Record<string, unknown> = companyId
+      ? { ...baseFilter, companyId: String(companyId) }
+      : baseFilter;
+
+    if (search && typeof search === 'string' && search.trim()) {
+      const searchTerm = search.trim();
+      whereClause = {
+        ...whereClause,
+        OR: [
+          { firstName: { contains: searchTerm } },
+          { lastName: { contains: searchTerm } },
+          { email: { contains: searchTerm } },
+          { department: { contains: searchTerm } },
+          { jobTitle: { contains: searchTerm } }
+        ]
+      };
+    }
+
+    const employees = isTemplate
+      ? []
+      : await prisma.employee.findMany({
+        where: Object.keys(whereClause).length > 0 ? whereClause : undefined,
+        orderBy: { lastName: 'asc' }
+      });
+
+    const maskedEmployees = isTemplate ? [] : maskEmployeesData(employees);
+    const rows = getExportRows(maskedEmployees);
+
+    if (exportFormat === 'xlsx') {
+      const worksheet = XLSX.utils.json_to_sheet(rows, {
+        header: EMPLOYEE_IMPORT_HEADERS as string[]
+      });
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Employees');
+      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename=\"employees-${isTemplate ? 'template' : 'export'}.xlsx\"`
+      );
+      return res.send(buffer);
+    }
+
+    const headerLine = EMPLOYEE_IMPORT_HEADERS.join(',');
+    const dataLines = rows.map((row) =>
+      EMPLOYEE_IMPORT_HEADERS.map((header) => escapeCsv(row[header])).join(',')
+    );
+    const csvContent = [headerLine, ...dataLines].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=\"employees-${isTemplate ? 'template' : 'export'}.csv\"`
+    );
+    return res.send(csvContent);
+  } catch (error) {
+    logger.error('Error exporting employees:', error);
+    res.status(500).json({ error: 'Failed to export employees' });
+  }
+});
+
+// POST /api/employees/bulk-import - Bulk import employees from CSV/XLSX
+router.post(
+  '/bulk-import',
+  authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'),
+  upload.single('file'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'File is required for import' });
+      }
+
+      const extension = path.extname(req.file.originalname || '').toLowerCase();
+      const format = extension === '.xlsx' ? 'xlsx' : extension === '.csv' ? 'csv' : null;
+      if (!format) {
+        return res.status(400).json({ error: 'Unsupported file format. Use CSV or XLSX.' });
+      }
+
+      const defaultCompanyId = typeof req.body.companyId === 'string' ? req.body.companyId : undefined;
+      const { employees, errors } = parseEmployeeImportFile(
+        req.file.buffer,
+        format,
+        defaultCompanyId
+      );
+
+      if (errors.length > 0) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
+
+      if (employees.length === 0) {
+        return res.status(400).json({ error: 'No valid employee rows found in file' });
+      }
+
+      const companyIds = Array.from(new Set(employees.map((employee) => employee.companyId)));
+      const inaccessibleCompanyIds = companyIds.filter((id) => !hasCompanyAccess(req, id));
+      if (inaccessibleCompanyIds.length > 0) {
+        return res.status(403).json({
+          error: 'Access denied to one or more companies',
+          companyIds: inaccessibleCompanyIds
+        });
+      }
+
+      const validationErrors: Array<{ row: number; message: string; field?: string }> = [];
+      for (const employee of employees) {
+        const payLimit = PAY_RATE_LIMITS[employee.payType];
+        if (employee.payRate > payLimit.max) {
+          validationErrors.push({
+            row: employee.importRow,
+            field: 'payRate',
+            message: payLimit.errorMessage
+          });
+        }
+
+        if (employee.state === 'MD') {
+          if (!employee.county) {
+            validationErrors.push({
+              row: employee.importRow,
+              field: 'county',
+              message: 'Maryland local tax calculation requires a valid county'
+            });
+          } else {
+            const validatedCounty = validateMarylandCounty(employee.county);
+            if (!validatedCounty) {
+              validationErrors.push({
+                row: employee.importRow,
+                field: 'county',
+                message: `"${employee.county}" is not a valid Maryland county`
+              });
+            } else {
+              employee.county = validatedCounty;
+            }
+          }
+        }
+      }
+
+      if (validationErrors.length > 0) {
+        return res.status(400).json({ error: 'Validation failed', details: validationErrors });
+      }
+
+      const seenHashes = new Set<string>();
+      const duplicateRows: number[] = [];
+      employees.forEach((employee) => {
+        if (seenHashes.has(employee.ssnHash)) {
+          duplicateRows.push(employee.importRow);
+        } else {
+          seenHashes.add(employee.ssnHash);
+        }
+      });
+
+      if (duplicateRows.length > 0) {
+        return res.status(400).json({
+          error: 'Duplicate SSN detected in file',
+          rows: duplicateRows
+        });
+      }
+
+      const existingEmployees = await prisma.employee.findMany({
+        where: { ssnHash: { in: Array.from(seenHashes) } },
+        select: { ssnHash: true }
+      });
+
+      if (existingEmployees.length > 0) {
+        return res.status(400).json({
+          error: 'Employee with this SSN already exists',
+          ssnHashes: existingEmployees.map((employee) => employee.ssnHash)
+        });
+      }
+
+      const createdEmployees = await prisma.$transaction(
+        employees.map((employee) => {
+          const { importRow, ...data } = employee;
+          return prisma.employee.create({
+            data: {
+              ...data,
+              isActive: true
+            }
+          });
+        })
+      );
+
+      createdEmployees.forEach((employee) => {
+        logEmployeeAccess(req, 'CREATE', employee.id, employee.companyId, {
+          firstName: employee.firstName,
+          lastName: employee.lastName
+        });
+        logSensitiveAccess(req, 'EMPLOYEE_SSN', employee.id, employee.companyId, 'CREATE');
+        if (employee.bankAccountNumber || employee.bankRoutingNumber) {
+          logSensitiveAccess(req, 'EMPLOYEE_BANK', employee.id, employee.companyId, 'CREATE');
+        }
+      });
+
+      return res.status(201).json({ data: maskEmployeesData(createdEmployees) });
+    } catch (error) {
+      logger.error('Error importing employees:', error);
+      return res.status(500).json({ error: 'Failed to import employees' });
+    }
+  }
+);
 
 // GET /api/employees/:id - Get single employee
 // Multi-tenant: Verifies user has access to the employee's company

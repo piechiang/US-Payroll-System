@@ -38,6 +38,61 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
 // Roles that can approve payroll
 const APPROVER_ROLES = ['ADMIN', 'MANAGER'];
 
+async function submitPayPeriodForApproval(periodId: string, req: AuthRequest, res: Response) {
+  const period = await prisma.payPeriod.findUnique({
+    where: { id: periodId }
+  });
+
+  if (!period) {
+    return res.status(404).json({ error: 'Pay period not found' });
+  }
+
+  if (!hasCompanyAccess(req, period.companyId)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  // Validate status transition
+  if (!STATUS_TRANSITIONS[period.status]?.includes('PENDING_APPROVAL')) {
+    return res.status(400).json({
+      error: 'Invalid status transition',
+      currentStatus: period.status,
+      allowedTransitions: STATUS_TRANSITIONS[period.status]
+    });
+  }
+
+  // Check if there are payrolls to approve
+  const payrollCount = await prisma.payroll.count({
+    where: { payPeriodId: period.id }
+  });
+
+  if (payrollCount === 0) {
+    return res.status(400).json({
+      error: 'Cannot submit empty payroll',
+      message: 'No payroll records found for this pay period'
+    });
+  }
+
+  const updated = await prisma.payPeriod.update({
+    where: { id: period.id },
+    data: {
+      status: 'PENDING_APPROVAL',
+      submittedBy: req.user?.userId,
+      submittedAt: new Date(),
+      // Clear any previous rejection
+      rejectedBy: null,
+      rejectedAt: null,
+      rejectionNote: null
+    }
+  });
+
+  return res.json({
+    message: 'Payroll submitted for approval',
+    id: updated.id,
+    status: updated.status,
+    submittedAt: updated.submittedAt
+  });
+}
+
 /**
  * GET /api/payroll-approval/pending
  * Get all payroll periods pending approval for accessible companies
@@ -232,60 +287,49 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
  */
 router.post('/:id/submit', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (req: AuthRequest, res: Response) => {
   try {
-    const period = await prisma.payPeriod.findUnique({
-      where: { id: req.params.id }
+    return await submitPayPeriodForApproval(req.params.id, req, res);
+  } catch (error) {
+    logger.error('Error submitting payroll:', error);
+    res.status(500).json({ error: 'Failed to submit payroll for approval' });
+  }
+});
+
+/**
+ * POST /api/payroll-approval/submit-by-period
+ * Submit a payroll period for approval by company + date range
+ */
+router.post('/submit-by-period', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (req: AuthRequest, res: Response) => {
+  try {
+    const schema = z.object({
+      companyId: z.string(),
+      startDate: z.string().transform(str => new Date(str)),
+      endDate: z.string().transform(str => new Date(str))
+    });
+
+    const { companyId, startDate, endDate } = schema.parse(req.body);
+
+    if (!hasCompanyAccess(req, companyId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const period = await prisma.payPeriod.findFirst({
+      where: {
+        companyId,
+        startDate,
+        endDate
+      }
     });
 
     if (!period) {
       return res.status(404).json({ error: 'Pay period not found' });
     }
 
-    if (!hasCompanyAccess(req, period.companyId)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    // Validate status transition
-    if (!STATUS_TRANSITIONS[period.status]?.includes('PENDING_APPROVAL')) {
-      return res.status(400).json({
-        error: 'Invalid status transition',
-        currentStatus: period.status,
-        allowedTransitions: STATUS_TRANSITIONS[period.status]
-      });
-    }
-
-    // Check if there are payrolls to approve
-    const payrollCount = await prisma.payroll.count({
-      where: { payPeriodId: period.id }
-    });
-
-    if (payrollCount === 0) {
-      return res.status(400).json({
-        error: 'Cannot submit empty payroll',
-        message: 'No payroll records found for this pay period'
-      });
-    }
-
-    const updated = await prisma.payPeriod.update({
-      where: { id: period.id },
-      data: {
-        status: 'PENDING_APPROVAL',
-        submittedBy: req.user?.userId,
-        submittedAt: new Date(),
-        // Clear any previous rejection
-        rejectedBy: null,
-        rejectedAt: null,
-        rejectionNote: null
-      }
-    });
-
-    res.json({
-      message: 'Payroll submitted for approval',
-      id: updated.id,
-      status: updated.status,
-      submittedAt: updated.submittedAt
-    });
+    return await submitPayPeriodForApproval(period.id, req, res);
   } catch (error) {
-    logger.error('Error submitting payroll:', error);
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: error.errors });
+    }
+    logger.error('Error submitting payroll for approval:', error);
     res.status(500).json({ error: 'Failed to submit payroll for approval' });
   }
 });

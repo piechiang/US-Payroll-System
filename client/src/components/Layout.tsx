@@ -4,6 +4,7 @@ import {
   Users,
   Building2,
   DollarSign,
+  CalendarDays,
   History,
   Settings,
 } from 'lucide-react'
@@ -12,6 +13,7 @@ const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Employees', href: '/employees', icon: Users },
   { name: 'Companies', href: '/companies', icon: Building2 },
+  { name: 'Pay Periods', href: '/pay-periods', icon: CalendarDays },
   { name: 'Run Payroll', href: '/payroll/run', icon: DollarSign },
   { name: 'Payroll History', href: '/payroll/history', icon: History },
 ]

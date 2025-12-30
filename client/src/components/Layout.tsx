@@ -7,6 +7,8 @@ import {
   History,
   Settings,
 } from 'lucide-react'
+import CompanySwitcher from './CompanySwitcher'
+import { useAuth } from '../context/AuthContext'
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -17,6 +19,11 @@ const navigation = [
 ]
 
 export default function Layout() {
+  const { user } = useAuth()
+  const userInitials = user
+    ? `${user.firstName?.[0] ?? ''}${user.lastName?.[0] ?? ''}`.trim() || user.email[0]
+    : 'U'
+
   return (
     <div className="min-h-screen flex">
       {/* Sidebar */}
@@ -67,9 +74,12 @@ export default function Layout() {
               {/* Dynamic page title could go here */}
             </h2>
             <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-600">Admin User</span>
+              <CompanySwitcher />
+              <span className="text-sm text-gray-600">
+                {user ? `${user.firstName} ${user.lastName}` : 'User'}
+              </span>
               <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                A
+                {userInitials.toUpperCase()}
               </div>
             </div>
           </div>

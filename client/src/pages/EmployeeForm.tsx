@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 interface EmployeeFormData {
   firstName: string
@@ -67,6 +68,7 @@ export default function EmployeeForm() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const isEditing = Boolean(id)
+  const { companyId } = useAuth()
 
   const { register, handleSubmit, formState: { errors }, watch, setValue } = useForm<EmployeeFormData>()
   const watchState = watch('state')
@@ -82,6 +84,12 @@ export default function EmployeeForm() {
       setValue('retirement401kAmount', null)
     }
   }, [watch401kType, setValue])
+
+  useEffect(() => {
+    if (!isEditing && companyId) {
+      setValue('companyId', companyId)
+    }
+  }, [companyId, isEditing, setValue])
 
   // Fetch companies for dropdown
   const { data: companies = [] } = useQuery({

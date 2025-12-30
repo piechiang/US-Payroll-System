@@ -1,6 +1,11 @@
 import PDFDocument from 'pdfkit';
-import { Payroll, Employee, Company, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { maskSSN } from './encryption.js';
+
+// Use Prisma's generated types for payroll, employee, and company
+type Payroll = Prisma.PayrollGetPayload<object>;
+type Employee = Prisma.EmployeeGetPayload<object>;
+type Company = Prisma.CompanyGetPayload<object>;
 
 interface PaystubData {
   payroll: Payroll;
@@ -8,10 +13,14 @@ interface PaystubData {
   company: Company;
 }
 
-// Helper to create Decimal-like object
-const toDecimal = (value: number): Prisma.Decimal => {
-  return new Prisma.Decimal(value);
-};
+// Helper type for decimal values (can be Prisma.Decimal or number)
+type DecimalValue = Prisma.Decimal | number;
+
+interface DeductionItem {
+  desc: string;
+  current: DecimalValue;
+  ytd: DecimalValue;
+}
 
 export class PaystubGenerator {
   private doc: PDFKit.PDFDocument;
@@ -209,7 +218,7 @@ export class PaystubGenerator {
 
     // Deductions
     let rowY = tableY + 20;
-    const deductions = [
+    const deductions: DeductionItem[] = [
       { desc: 'Federal Income Tax', current: payroll.federalWithholding, ytd: payroll.ytdFederalTax },
       { desc: 'Social Security', current: payroll.socialSecurity, ytd: payroll.ytdSocialSecurity },
       { desc: 'Medicare', current: payroll.medicare, ytd: payroll.ytdMedicare },
@@ -227,7 +236,7 @@ export class PaystubGenerator {
       deductions.push({
         desc: 'State Disability (SDI)',
         current: payroll.stateDisability,
-        ytd: toDecimal(0),
+        ytd: 0,
       });
     }
 
@@ -235,7 +244,7 @@ export class PaystubGenerator {
       deductions.push({
         desc: 'Local Tax',
         current: payroll.localWithholding,
-        ytd: toDecimal(0),
+        ytd: 0,
       });
     }
 
@@ -243,7 +252,7 @@ export class PaystubGenerator {
       deductions.push({
         desc: '401(k)',
         current: payroll.retirement401k,
-        ytd: toDecimal(0),
+        ytd: 0,
       });
     }
 

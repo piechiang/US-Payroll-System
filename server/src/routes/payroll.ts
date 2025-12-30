@@ -1,7 +1,8 @@
 import { Router, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../index.js';
 import { z } from 'zod';
-import { PayrollCalculator, UnsupportedStateError, isStateSupported } from '../services/payrollCalculator.js';
+import { PayrollCalculator, PayrollResult, UnsupportedStateError, isStateSupported } from '../services/payrollCalculator.js';
 import { generatePaystubPDF } from '../services/paystubGenerator.js';
 import { AuthRequest, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
 import { getSupportedStates } from '../tax/state/index.js';
@@ -9,6 +10,9 @@ import { payrollRunLimiter, exportLimiter } from '../middleware/rateLimit.js';
 import { logPayrollOperation } from '../services/auditLog.js';
 import { acquirePayrollLock, releasePayrollLock, generateIdempotencyKey, getPayrollLockStatus } from '../services/payrollLock.js';
 import { logger } from '../services/logger.js';
+
+// Type for employee with company included
+type EmployeeWithCompany = Prisma.EmployeeGetPayload<{ include: { company: true } }>;
 
 const router = Router();
 
@@ -173,7 +177,7 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
     });
 
     // Build employee lookup map for O(1) access instead of O(n) Array.find()
-    const employeeMap = new Map(employees.map(e => [e.id, e]));
+    const employeeMap = new Map<string, EmployeeWithCompany>(employees.map(e => [e.id, e]));
 
     // Pre-validate: Check if all employees have supported states
     const unsupportedStates: { employeeId: string; employeeName: string; state: string }[] = [];
@@ -212,9 +216,9 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
     }
 
     // Use transaction to ensure all-or-nothing processing
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const calculator = new PayrollCalculator();
-      const payrollResults = [];
+      const payrollResults: (PayrollResult & { payrollId: string; ytd: Record<string, number> })[] = [];
 
       // Get the year of the pay date for YTD calculations
       const payYear = data.payDate.getFullYear();

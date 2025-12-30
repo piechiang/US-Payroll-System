@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from 'express';
-import { Prisma } from '@prisma/client';
 import { ZodError } from 'zod';
 import crypto from 'crypto';
 import { logger } from '../services/logger.js';
@@ -83,9 +82,33 @@ function isProduction(): boolean {
 }
 
 /**
+ * Check if error is a Prisma known request error
+ */
+function isPrismaKnownRequestError(error: unknown): error is { code: string; meta?: Record<string, unknown> } {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof (error as { code: unknown }).code === 'string'
+  );
+}
+
+/**
+ * Check if error is a Prisma validation error
+ */
+function isPrismaValidationError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    (error as { name: unknown }).name === 'PrismaClientValidationError'
+  );
+}
+
+/**
  * Map Prisma errors to user-friendly messages
  */
-function handlePrismaError(error: Prisma.PrismaClientKnownRequestError): {
+function handlePrismaError(error: { code: string; meta?: Record<string, unknown> }): {
   statusCode: number;
   message: string;
   errorType: ErrorType;
@@ -183,12 +206,12 @@ export function errorHandler(
     errorType = 'VALIDATION_ERROR';
     message = zodResult.message;
     details = zodResult.details; // Always show validation details
-  } else if (err instanceof Prisma.PrismaClientKnownRequestError) {
+  } else if (isPrismaKnownRequestError(err)) {
     const prismaResult = handlePrismaError(err);
     statusCode = prismaResult.statusCode;
     errorType = prismaResult.errorType;
     message = prismaResult.message;
-  } else if (err instanceof Prisma.PrismaClientValidationError) {
+  } else if (isPrismaValidationError(err)) {
     statusCode = 400;
     errorType = 'VALIDATION_ERROR';
     message = 'Invalid data format';

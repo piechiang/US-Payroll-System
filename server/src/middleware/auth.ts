@@ -76,7 +76,7 @@ export async function authenticate(
         select: { companyId: true }
       });
 
-      req.accessibleCompanyIds = companyAccess.map(ca => ca.companyId);
+      req.accessibleCompanyIds = companyAccess.map((ca: { companyId: string }) => ca.companyId);
 
       next();
     } catch (jwtError) {

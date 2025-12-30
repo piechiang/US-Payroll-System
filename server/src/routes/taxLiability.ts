@@ -1,10 +1,14 @@
 import { Router, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../index.js';
 import { z } from 'zod';
 import { AuthRequest, hasCompanyAccess, authorizeRoles } from '../middleware/auth.js';
 import { logger } from '../services/logger.js';
 
 const router = Router();
+
+// Type for payroll records
+type PayrollRecord = Prisma.PayrollGetPayload<object>;
 
 /**
  * Round to 2 decimal places
@@ -195,7 +199,7 @@ router.get('/941', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
     }
 
     // Get unique employee count
-    const uniqueEmployees = new Set(payrolls.map(p => p.employeeId)).size;
+    const uniqueEmployees = new Set(payrolls.map((p: { employeeId: string }) => p.employeeId)).size;
 
     // Total tax liability
     const totalTaxLiability = totalFederalWithholding + totalSocialSecurityTax + totalMedicareTax;
@@ -446,7 +450,7 @@ router.get('/state-withholding', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'
       summary: {
         stateCount: stateReports.length,
         totalPayrolls: payrolls.length,
-        uniqueEmployees: new Set(payrolls.map(p => p.employeeId)).size
+        uniqueEmployees: new Set(payrolls.map((p: { employeeId: string }) => p.employeeId)).size
       }
     });
   } catch (error) {
@@ -543,12 +547,12 @@ router.get('/deposit-schedule', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER')
       const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
       const monthEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
 
-      const monthPayrolls = payrolls.filter(p => {
+      const monthPayrolls = payrolls.filter((p: PayrollRecord) => {
         const payDate = new Date(p.payDate);
         return payDate >= monthStart && payDate <= monthEnd;
       });
 
-      const monthLiability = monthPayrolls.reduce((sum, p) => {
+      const monthLiability = monthPayrolls.reduce((sum: number, p: PayrollRecord) => {
         return sum + Number(p.federalWithholding) +
           Number(p.socialSecurity) + Number(p.employerSocialSecurity) +
           Number(p.medicare) + Number(p.employerMedicare);

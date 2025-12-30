@@ -5,9 +5,10 @@ import { PayrollCalculator, UnsupportedStateError, isStateSupported } from '../s
 import { generatePaystubPDF } from '../services/paystubGenerator.js';
 import { AuthRequest, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
 import { getSupportedStates } from '../tax/state/index.js';
-import { payrollRunLimiter } from '../middleware/rateLimit.js';
+import { payrollRunLimiter, exportLimiter } from '../middleware/rateLimit.js';
 import { logPayrollOperation } from '../services/auditLog.js';
 import { acquirePayrollLock, releasePayrollLock, generateIdempotencyKey, getPayrollLockStatus } from '../services/payrollLock.js';
+import { logger } from '../services/logger.js';
 
 const router = Router();
 
@@ -110,7 +111,7 @@ router.post('/calculate', async (req: AuthRequest, res: Response) => {
         supportedStates: error.supportedStates
       });
     }
-    console.error('Error calculating payroll:', error);
+    logger.error('Error calculating payroll:', error);
     res.status(500).json({ error: 'Failed to calculate payroll' });
   }
 });
@@ -385,7 +386,7 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
         totalEmployees: result.length,
         totalGrossPay: result.reduce((sum, r) => sum + r.earnings.grossPay, 0),
         totalNetPay: result.reduce((sum, r) => sum + r.netPay, 0),
-        totalEmployeeTaxes: result.reduce((sum, r) => sum + r.totalDeductions, 0),
+        totalEmployeeTaxes: result.reduce((sum, r) => sum + r.totalEmployeeTaxes, 0),
         totalEmployeeDeductions: result.reduce((sum, r) => sum + r.totalDeductions, 0),
         totalEmployerTaxes: result.reduce((sum, r) => sum + r.employerTaxes.total, 0),
         totalEmployerCost: result.reduce((sum, r) => sum + r.totalEmployerCost, 0)
@@ -408,7 +409,7 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
         supportedStates: error.supportedStates
       });
     }
-    console.error('Error running payroll:', error);
+    logger.error('Error running payroll:', error);
     res.status(500).json({ error: 'Failed to run payroll' });
   }
 });
@@ -441,7 +442,7 @@ router.get('/history/:employeeId', async (req: AuthRequest, res: Response) => {
 
     res.json(payrolls);
   } catch (error) {
-    console.error('Error fetching payroll history:', error);
+    logger.error('Error fetching payroll history:', error);
     res.status(500).json({ error: 'Failed to fetch payroll history' });
   }
 });
@@ -470,14 +471,15 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 
     res.json(payroll);
   } catch (error) {
-    console.error('Error fetching payroll:', error);
+    logger.error('Error fetching payroll:', error);
     res.status(500).json({ error: 'Failed to fetch payroll record' });
   }
 });
 
 // GET /api/payroll/:id/pdf - Generate PDF paystub
 // Multi-tenant: Verifies user has access to the payroll's company
-router.get('/:id/pdf', async (req: AuthRequest, res: Response) => {
+// Rate limited: 10 exports per hour
+router.get('/:id/pdf', exportLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const payroll = await prisma.payroll.findUnique({
       where: { id: req.params.id },
@@ -513,7 +515,7 @@ router.get('/:id/pdf', async (req: AuthRequest, res: Response) => {
 
     pdfDoc.pipe(res);
   } catch (error) {
-    console.error('Error generating paystub PDF:', error);
+    logger.error('Error generating paystub PDF:', error);
     res.status(500).json({ error: 'Failed to generate paystub' });
   }
 });
@@ -544,7 +546,7 @@ router.get('/company/:companyId', async (req: AuthRequest, res: Response) => {
 
     res.json(payrolls);
   } catch (error) {
-    console.error('Error fetching company payrolls:', error);
+    logger.error('Error fetching company payrolls:', error);
     res.status(500).json({ error: 'Failed to fetch payrolls' });
   }
 });
@@ -600,7 +602,7 @@ router.get('/lock-status', async (req: AuthRequest, res: Response) => {
 
     res.json(status);
   } catch (error) {
-    console.error('Error checking payroll lock status:', error);
+    logger.error('Error checking payroll lock status:', error);
     res.status(500).json({ error: 'Failed to check lock status' });
   }
 });

@@ -79,3 +79,17 @@ export const writeLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// Export/Report rate limit - prevents bulk data exfiltration
+// 10 exports per hour per IP (for PDF, ACH files, W-2 generation, tax reports)
+export const exportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  message: {
+    error: 'Too many export requests',
+    message: 'Export rate limit exceeded. Please try again later.',
+    retryAfter: '1 hour'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});

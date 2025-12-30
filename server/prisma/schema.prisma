@@ -86,6 +86,7 @@ model Company {
   payrolls    Payroll[]
   payPeriods  PayPeriod[]
   userAccess  CompanyAccess[]
+  w2Forms     W2Form[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -148,6 +149,7 @@ model Employee {
   // Relations
   company  Company   @relation(fields: [companyId], references: [id])
   payrolls Payroll[]
+  w2Forms  W2Form[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -165,7 +167,18 @@ model PayPeriod {
   endDate   DateTime
   payDate   DateTime
 
-  status    String @default("DRAFT") // DRAFT, PENDING, PROCESSED, PAID, VOID
+  // Status workflow: DRAFT -> PENDING_APPROVAL -> APPROVED -> PROCESSING -> PROCESSED -> PAID
+  // Can also be: REJECTED (needs revision) or VOID (cancelled)
+  status    String @default("DRAFT")
+
+  // Approval workflow
+  submittedBy   String?   // User who submitted for approval
+  submittedAt   DateTime?
+  approvedBy    String?   // User who approved
+  approvedAt    DateTime?
+  rejectedBy    String?   // User who rejected (if applicable)
+  rejectedAt    DateTime?
+  rejectionNote String?   // Reason for rejection
 
   company  Company   @relation(fields: [companyId], references: [id])
   payrolls Payroll[]
@@ -174,6 +187,7 @@ model PayPeriod {
   updatedAt DateTime @updatedAt
 
   @@index([companyId, startDate])
+  @@index([status])
   @@map("pay_periods")
 }
 
@@ -330,4 +344,107 @@ model PayrollLock {
   @@unique([companyId, payPeriodStart, payPeriodEnd, status])
   @@index([expiresAt])
   @@map("payroll_locks")
+}
+
+// W-2 Form data for year-end tax reporting
+// Stores calculated annual totals for each employee
+model W2Form {
+  id          String @id @default(cuid())
+  employeeId  String
+  companyId   String
+  taxYear     Int    // e.g., 2024
+
+  // Box a: Employee's SSN (stored encrypted, decrypted for PDF)
+  // Box b: Employer's EIN (from Company)
+  // Box c: Employer's name and address (from Company)
+  // Box e: Employee's name
+  // Box f: Employee's address
+
+  // Box 1: Wages, tips, other compensation
+  wagesTipsOther Decimal
+
+  // Box 2: Federal income tax withheld
+  federalWithholding Decimal
+
+  // Box 3: Social Security wages
+  socialSecurityWages Decimal
+
+  // Box 4: Social Security tax withheld
+  socialSecurityTax Decimal
+
+  // Box 5: Medicare wages and tips
+  medicareWages Decimal
+
+  // Box 6: Medicare tax withheld
+  medicareTax Decimal
+
+  // Box 7: Social Security tips
+  socialSecurityTips Decimal @default(0)
+
+  // Box 8: Allocated tips
+  allocatedTips Decimal @default(0)
+
+  // Box 10: Dependent care benefits
+  dependentCareBenefits Decimal @default(0)
+
+  // Box 11: Nonqualified plans
+  nonqualifiedPlans Decimal @default(0)
+
+  // Box 12: Various codes (stored as JSON)
+  // Common codes: D (401k), E (403b), W (HSA), DD (Health insurance cost)
+  box12Codes String? // JSON array: [{code: "D", amount: 5000}, ...]
+
+  // Box 13: Checkboxes
+  statutoryEmployee Boolean @default(false)
+  retirementPlan    Boolean @default(false)
+  thirdPartySickPay Boolean @default(false)
+
+  // Box 14: Other (employer-defined, stored as JSON)
+  box14Other String? // JSON array: [{description: "Union Dues", amount: 500}, ...]
+
+  // Boxes 15-20: State/Local information
+  // Box 15: State and Employer's state ID
+  stateCode           String?
+  stateEmployerId     String?
+
+  // Box 16: State wages, tips, etc.
+  stateWages Decimal @default(0)
+
+  // Box 17: State income tax
+  stateWithholding Decimal @default(0)
+
+  // Box 18: Local wages, tips, etc.
+  localWages Decimal @default(0)
+
+  // Box 19: Local income tax
+  localWithholding Decimal @default(0)
+
+  // Box 20: Locality name
+  localityName String?
+
+  // Second state (if employee worked in multiple states)
+  state2Code       String?
+  state2EmployerId String?
+  state2Wages      Decimal @default(0)
+  state2Withholding Decimal @default(0)
+
+  // Status
+  status String @default("DRAFT") // DRAFT, GENERATED, SENT, CORRECTED
+
+  // Control number (Box d) - unique identifier for this W-2
+  controlNumber String?
+
+  // Timestamps
+  generatedAt DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  employee Employee @relation(fields: [employeeId], references: [id])
+  company  Company  @relation(fields: [companyId], references: [id])
+
+  @@unique([employeeId, taxYear]) // One W-2 per employee per year
+  @@index([companyId, taxYear])
+  @@map("w2_forms")
 }

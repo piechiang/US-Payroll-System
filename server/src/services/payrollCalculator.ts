@@ -60,7 +60,8 @@ export interface PayrollResult {
   retirement401k: number;            // Employee 401(k) contribution
   employer401kMatch: number;         // Employer 401(k) match
   employerTaxes: EmployerTaxResult;  // Employer-paid taxes (FUTA, SUTA, FICA match)
-  totalDeductions: number;           // Employee deductions only
+  totalEmployeeTaxes: number;        // Sum of all employee taxes (federal + state + local)
+  totalDeductions: number;           // Total employee deductions (taxes + 401k + other)
   netPay: number;
   reimbursements: number;
   totalPay: number;                  // netPay + reimbursements
@@ -162,8 +163,8 @@ export class PayrollCalculator {
       sutaRate
     });
 
-    // Total employee deductions (including local taxes)
-    let totalDeductions =
+    // Calculate total employee taxes (excluding 401k which is a deduction, not a tax)
+    let totalEmployeeTaxes =
       federalTax.incomeTax +
       federalTax.socialSecurity +
       federalTax.medicare +
@@ -173,10 +174,11 @@ export class PayrollCalculator {
 
     // Add local taxes if applicable
     if (localTax) {
-      totalDeductions += localTax.total;
+      totalEmployeeTaxes += localTax.total;
     }
 
-    totalDeductions += retirement401k;
+    // Total deductions = taxes + 401k contributions
+    const totalDeductions = totalEmployeeTaxes + retirement401k;
 
     // Net pay calculation:
     // - grossPay includes all taxable income (wages + credit card tips + cash tips)
@@ -211,6 +213,7 @@ export class PayrollCalculator {
       retirement401k,
       employer401kMatch,
       employerTaxes,
+      totalEmployeeTaxes,
       totalDeductions,
       netPay,
       reimbursements,

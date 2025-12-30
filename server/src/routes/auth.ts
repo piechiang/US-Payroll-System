@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { authenticate, authorizeRoles, AuthRequest } from '../middleware/auth.js';
 import { authLimiter, registrationLimiter } from '../middleware/rateLimit.js';
 import { logAuthEvent } from '../services/auditLog.js';
+import { logger } from '../services/logger.js';
 
 const router = Router();
 
@@ -27,10 +28,35 @@ function getJWTSecret(): string {
 const JWT_SECRET = getJWTSecret();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
+// Common passwords to reject (top 100 most common)
+const COMMON_PASSWORDS = new Set([
+  'password', 'password1', 'password123', '123456', '12345678', '123456789',
+  'qwerty', 'abc123', 'monkey', 'master', 'dragon', 'letmein', 'login',
+  'admin', 'welcome', 'passw0rd', 'Password1', 'Password123'
+]);
+
+/**
+ * Password strength validation
+ * Requirements:
+ * - Minimum 12 characters
+ * - At least one uppercase letter
+ * - At least one lowercase letter
+ * - At least one number
+ * - At least one special character
+ * - Not a common password
+ */
+const passwordSchema = z.string()
+  .min(12, 'Password must be at least 12 characters')
+  .refine(pwd => /[A-Z]/.test(pwd), 'Password must contain at least one uppercase letter')
+  .refine(pwd => /[a-z]/.test(pwd), 'Password must contain at least one lowercase letter')
+  .refine(pwd => /[0-9]/.test(pwd), 'Password must contain at least one number')
+  .refine(pwd => /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(pwd), 'Password must contain at least one special character')
+  .refine(pwd => !COMMON_PASSWORDS.has(pwd.toLowerCase()), 'Password is too common, please choose a stronger password');
+
 // Validation schemas
 const registerSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8),
+  password: passwordSchema,
   firstName: z.string().min(1),
   lastName: z.string().min(1)
   // NOTE: role is NOT accepted from registration request - always defaults to VIEWER
@@ -94,7 +120,7 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: error.errors });
     }
-    console.error('Error registering user:', error);
+    logger.error('Error registering user:', error);
     res.status(500).json({ error: 'Failed to register user' });
   }
 });
@@ -150,7 +176,7 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: error.errors });
     }
-    console.error('Error logging in:', error);
+    logger.error('Error logging in:', error);
     res.status(500).json({ error: 'Failed to login' });
   }
 });
@@ -187,7 +213,7 @@ router.get('/me', async (req: Request, res: Response) => {
     if (error instanceof jwt.JsonWebTokenError) {
       return res.status(401).json({ error: 'Invalid token' });
     }
-    console.error('Error fetching user:', error);
+    logger.error('Error fetching user:', error);
     res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
@@ -234,7 +260,7 @@ router.put(
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: 'Validation failed', details: error.errors });
       }
-      console.error('Error updating user role:', error);
+      logger.error('Error updating user role:', error);
       res.status(500).json({ error: 'Failed to update user role' });
     }
   }
@@ -261,10 +287,97 @@ router.get(
 
       res.json(users);
     } catch (error) {
-      console.error('Error listing users:', error);
+      logger.error('Error listing users:', error);
       res.status(500).json({ error: 'Failed to list users' });
     }
   }
 );
+
+// POST /api/auth/change-password - Change current user's password
+const changePasswordSchema = z.object({
+  currentPassword: z.string(),
+  newPassword: passwordSchema
+});
+
+router.post('/change-password', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const data = changePasswordSchema.parse(req.body);
+
+    if (!req.user?.userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    // Get user with current password
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Verify current password
+    const isValidPassword = await bcrypt.compare(data.currentPassword, user.password);
+    if (!isValidPassword) {
+      logAuthEvent(req, 'PASSWORD_CHANGE_FAILED', user.email, false, 'Invalid current password');
+      return res.status(400).json({ error: 'Current password is incorrect' });
+    }
+
+    // Ensure new password is different from current
+    const isSamePassword = await bcrypt.compare(data.newPassword, user.password);
+    if (isSamePassword) {
+      return res.status(400).json({ error: 'New password must be different from current password' });
+    }
+
+    // Hash and update password
+    const hashedPassword = await bcrypt.hash(data.newPassword, 12);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { password: hashedPassword }
+    });
+
+    logAuthEvent(req, 'PASSWORD_CHANGE', user.email, true);
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: error.errors });
+    }
+    logger.error('Error changing password:', error);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+// POST /api/auth/logout - Logout (client should discard token)
+router.post('/logout', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    // Log the logout event
+    if (req.user?.email) {
+      logAuthEvent(req, 'LOGOUT', req.user.email, true);
+    }
+
+    // Note: With JWT, we can't truly invalidate the token server-side
+    // For full session management, consider adding a token blacklist or session table
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    logger.error('Error logging out:', error);
+    res.status(500).json({ error: 'Failed to logout' });
+  }
+});
+
+// GET /api/auth/password-requirements - Get password requirements (public)
+router.get('/password-requirements', (_req, res: Response) => {
+  res.json({
+    minLength: 12,
+    requirements: [
+      'At least 12 characters',
+      'At least one uppercase letter (A-Z)',
+      'At least one lowercase letter (a-z)',
+      'At least one number (0-9)',
+      'At least one special character (!@#$%^&*...)',
+      'Cannot be a common password'
+    ]
+  });
+});
 
 export default router;

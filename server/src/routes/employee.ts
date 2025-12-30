@@ -5,6 +5,7 @@ import { AuthRequest, filterByAccessibleCompanies, authorizeRoles, hasCompanyAcc
 import { encrypt, decrypt, maskSSN, hashSSN, isEncrypted, encryptIfNeeded } from '../services/encryption.js';
 import { MARYLAND_LOCAL_TAX_INFO } from '../tax/local/baltimore.js';
 import { logEmployeeAccess, logSensitiveAccess } from '../services/auditLog.js';
+import { logger } from '../services/logger.js';
 
 // Valid Maryland counties for validation
 const VALID_MD_COUNTIES = Object.keys(MARYLAND_LOCAL_TAX_INFO.rates);
@@ -314,7 +315,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching employees:', error);
+    logger.error('Error fetching employees:', error);
     res.status(500).json({ error: 'Failed to fetch employees' });
   }
 });
@@ -356,7 +357,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     // Mask sensitive data before sending
     res.json(maskEmployeeData(employee));
   } catch (error) {
-    console.error('Error fetching employee:', error);
+    logger.error('Error fetching employee:', error);
     res.status(500).json({ error: 'Failed to fetch employee' });
   }
 });
@@ -456,7 +457,7 @@ router.post('/', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: A
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: error.errors });
     }
-    console.error('Error creating employee:', error);
+    logger.error('Error creating employee:', error);
     res.status(500).json({ error: 'Failed to create employee' });
   }
 });
@@ -674,7 +675,7 @@ router.put('/:id', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: error.errors });
     }
-    console.error('Error updating employee:', error);
+    logger.error('Error updating employee:', error);
     res.status(500).json({ error: 'Failed to update employee' });
   }
 });
@@ -716,7 +717,7 @@ router.delete('/:id', authorizeRoles('ADMIN', 'MANAGER'), async (req: AuthReques
     // Return masked data (employee may contain sensitive info)
     res.json({ message: 'Employee deactivated', employee: maskEmployeeData(employee) });
   } catch (error) {
-    console.error('Error deactivating employee:', error);
+    logger.error('Error deactivating employee:', error);
     res.status(500).json({ error: 'Failed to deactivate employee' });
   }
 });

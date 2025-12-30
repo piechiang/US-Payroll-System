@@ -1,5 +1,6 @@
 import { prisma } from '../index.js';
 import { AuthRequest } from '../middleware/auth.js';
+import { logger } from './logger.js';
 
 /**
  * Audit Log Service
@@ -18,6 +19,8 @@ export type AuditAction =
   | 'LOGIN'
   | 'LOGIN_FAILED'
   | 'LOGOUT'
+  | 'PASSWORD_CHANGE'
+  | 'PASSWORD_CHANGE_FAILED'
   | 'PAYROLL_RUN';
 
 // Resource types
@@ -77,7 +80,7 @@ export async function logAudit(
     });
   } catch (error) {
     // Don't throw - audit logging should not break the main operation
-    console.error('Failed to write audit log:', error);
+    logger.error('Failed to write audit log:', error);
   }
 }
 
@@ -143,7 +146,7 @@ export async function logPayrollOperation(
  */
 export async function logAuthEvent(
   req: AuthRequest | null,
-  action: 'LOGIN' | 'LOGIN_FAILED' | 'LOGOUT',
+  action: 'LOGIN' | 'LOGIN_FAILED' | 'LOGOUT' | 'PASSWORD_CHANGE' | 'PASSWORD_CHANGE_FAILED',
   email: string,
   success: boolean,
   errorMessage?: string
@@ -151,7 +154,7 @@ export async function logAuthEvent(
   await logAudit(req, {
     action,
     resource: 'AUTH',
-    description: `User ${action.toLowerCase().replace('_', ' ')}: ${email}`,
+    description: `User ${action.toLowerCase().replace(/_/g, ' ')}: ${email}`,
     metadata: { email },
     success,
     errorMessage,

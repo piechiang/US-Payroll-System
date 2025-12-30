@@ -8,6 +8,7 @@ import {
   getConfiguredStates
 } from '../tax/config/taxConfigLoader.js';
 import { getSupportedStates } from '../tax/state/index.js';
+import { logger } from '../services/logger.js';
 
 const router = Router();
 
@@ -39,7 +40,7 @@ router.get('/years', async (req: AuthRequest, res: Response) => {
         : null
     });
   } catch (error) {
-    console.error('Error fetching tax years:', error);
+    logger.error('Error fetching tax years:', error);
     res.status(500).json({ error: 'Failed to fetch tax configuration info' });
   }
 });
@@ -59,7 +60,7 @@ router.get('/federal/:year', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (req: 
     const config = loadFederalConfig(year);
     res.json(config);
   } catch (error) {
-    console.error('Error fetching federal config:', error);
+    logger.error('Error fetching federal config:', error);
     res.status(500).json({ error: 'Failed to fetch federal tax configuration' });
   }
 });
@@ -92,7 +93,7 @@ router.get('/state/:state/:year', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (
 
     res.json(config);
   } catch (error) {
-    console.error('Error fetching state config:', error);
+    logger.error('Error fetching state config:', error);
     res.status(500).json({ error: 'Failed to fetch state tax configuration' });
   }
 });
@@ -128,7 +129,7 @@ router.get('/rates-summary', async (req: AuthRequest, res: Response) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching rates summary:', error);
+    logger.error('Error fetching rates summary:', error);
     res.status(500).json({ error: 'Failed to fetch tax rates summary' });
   }
 });

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../index.js';
+import { logger } from '../services/logger.js';
 
 /**
  * Get JWT secret with security validation
@@ -82,7 +83,7 @@ export async function authenticate(
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
   } catch (error) {
-    console.error('Authentication error:', error);
+    logger.error('Authentication error:', error);
     return res.status(500).json({ error: 'Authentication failed' });
   }
 }
@@ -122,7 +123,7 @@ export function authorizeCompanyAccess(companyIdParam: string = 'companyId') {
 
       next();
     } catch (error) {
-      console.error('Authorization error:', error);
+      logger.error('Authorization error:', error);
       return res.status(500).json({ error: 'Authorization failed' });
     }
   };

@@ -2,8 +2,14 @@ import { Router, Response } from 'express';
 import { prisma } from '../index.js';
 import { z } from 'zod';
 import { AuthRequest, hasCompanyAccess, authorizeRoles } from '../middleware/auth.js';
+import { logger } from '../services/logger.js';
 
 const router = Router();
+
+/**
+ * Round to 2 decimal places
+ */
+const round = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * Federal Tax Deposit Schedule Types
@@ -270,7 +276,7 @@ router.get('/941', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: error.errors });
     }
-    console.error('Error generating 941 report:', error);
+    logger.error('Error generating 941 report:', error);
     res.status(500).json({ error: 'Failed to generate Form 941 report' });
   }
 });
@@ -447,7 +453,7 @@ router.get('/state-withholding', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: error.errors });
     }
-    console.error('Error generating state withholding report:', error);
+    logger.error('Error generating state withholding report:', error);
     res.status(500).json({ error: 'Failed to generate state withholding report' });
   }
 });
@@ -586,7 +592,7 @@ router.get('/deposit-schedule', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER')
       }
     });
   } catch (error) {
-    console.error('Error generating deposit schedule:', error);
+    logger.error('Error generating deposit schedule:', error);
     res.status(500).json({ error: 'Failed to generate deposit schedule' });
   }
 });
@@ -648,18 +654,18 @@ router.get('/summary', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (
       _count: true
     });
 
-    const round = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+    const roundDecimal = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
 
-    const federalWithholding = round(aggregation._sum.federalWithholding);
-    const employeeSS = round(aggregation._sum.socialSecurity);
-    const employerSS = round(aggregation._sum.employerSocialSecurity);
-    const employeeMedicare = round(aggregation._sum.medicare);
-    const employerMedicare = round(aggregation._sum.employerMedicare);
-    const futa = round(aggregation._sum.employerFuta);
-    const suta = round(aggregation._sum.employerSuta);
-    const stateWithholding = round(aggregation._sum.stateWithholding);
-    const stateDisability = round(aggregation._sum.stateDisability);
-    const localWithholding = round(aggregation._sum.localWithholding);
+    const federalWithholding = roundDecimal(aggregation._sum.federalWithholding);
+    const employeeSS = roundDecimal(aggregation._sum.socialSecurity);
+    const employerSS = roundDecimal(aggregation._sum.employerSocialSecurity);
+    const employeeMedicare = roundDecimal(aggregation._sum.medicare);
+    const employerMedicare = roundDecimal(aggregation._sum.employerMedicare);
+    const futa = roundDecimal(aggregation._sum.employerFuta);
+    const suta = roundDecimal(aggregation._sum.employerSuta);
+    const stateWithholding = roundDecimal(aggregation._sum.stateWithholding);
+    const stateDisability = roundDecimal(aggregation._sum.stateDisability);
+    const localWithholding = roundDecimal(aggregation._sum.localWithholding);
 
     const totalFICA = employeeSS + employerSS + employeeMedicare + employerMedicare;
     const form941Liability = federalWithholding + totalFICA;
@@ -670,11 +676,11 @@ router.get('/summary', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (
       period: periodType,
       dateRange: { start, end },
 
-      grossWages: round(aggregation._sum.grossPay),
+      grossWages: roundDecimal(aggregation._sum.grossPay),
       tips: {
-        creditCard: round(aggregation._sum.creditCardTips),
-        cash: round(aggregation._sum.cashTips),
-        total: round(Number(aggregation._sum.creditCardTips || 0) + Number(aggregation._sum.cashTips || 0))
+        creditCard: roundDecimal(aggregation._sum.creditCardTips),
+        cash: roundDecimal(aggregation._sum.cashTips),
+        total: roundDecimal(Number(aggregation._sum.creditCardTips || 0) + Number(aggregation._sum.cashTips || 0))
       },
 
       federal: {
@@ -683,12 +689,12 @@ router.get('/summary', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (
           socialSecurity: {
             employee: employeeSS,
             employer: employerSS,
-            total: round(employeeSS + employerSS)
+            total: roundDecimal(employeeSS + employerSS)
           },
           medicare: {
             employee: employeeMedicare,
             employer: employerMedicare,
-            total: round(employeeMedicare + employerMedicare)
+            total: roundDecimal(employeeMedicare + employerMedicare)
           },
           totalLiability: form941Liability
         },
@@ -712,8 +718,226 @@ router.get('/summary', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: error.errors });
     }
-    console.error('Error generating tax liability summary:', error);
+    logger.error('Error generating tax liability summary:', error);
     res.status(500).json({ error: 'Failed to generate tax liability summary' });
+  }
+});
+
+/**
+ * FUTA wage base limits by year
+ */
+const FUTA_WAGE_BASE: Record<number, number> = {
+  2023: 7000,
+  2024: 7000,
+  2025: 7000
+};
+
+/**
+ * GET /api/tax-liability/940
+ * Get Form 940 (Employer's Annual Federal Unemployment Tax Return) data
+ *
+ * Query params:
+ * - companyId: Company ID
+ * - year: Tax year
+ */
+router.get('/940', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (req: AuthRequest, res: Response) => {
+  try {
+    const query = z.object({
+      companyId: z.string(),
+      year: z.coerce.number().int().min(2020).max(2100)
+    }).parse(req.query);
+
+    // Multi-tenant check
+    if (!hasCompanyAccess(req, query.companyId)) {
+      return res.status(403).json({ error: 'Access denied to this company' });
+    }
+
+    // Get company info
+    const company = await prisma.company.findUnique({
+      where: { id: query.companyId },
+      select: {
+        id: true,
+        name: true,
+        ein: true,
+        address: true,
+        city: true,
+        state: true,
+        zipCode: true,
+        sutaRate: true
+      }
+    });
+
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const yearStart = new Date(query.year, 0, 1);
+    const yearEnd = new Date(query.year, 11, 31, 23, 59, 59);
+    const futaWageBase = FUTA_WAGE_BASE[query.year] || 7000;
+
+    // Get all payrolls for the year
+    const payrolls = await prisma.payroll.findMany({
+      where: {
+        companyId: query.companyId,
+        payDate: { gte: yearStart, lte: yearEnd },
+        status: { not: 'VOID' }
+      },
+      select: {
+        employeeId: true,
+        grossPay: true,
+        employerFuta: true,
+        payDate: true
+      },
+      orderBy: { payDate: 'asc' }
+    });
+
+    // Calculate FUTA taxable wages per employee (capped at $7,000)
+    const employeeWages = new Map<string, { total: number; taxable: number; futa: number }>();
+    const quarterlyFuta: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    const quarterlyWages: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+
+    for (const payroll of payrolls) {
+      const gross = Number(payroll.grossPay);
+      const futa = Number(payroll.employerFuta);
+      const quarter = Math.ceil((new Date(payroll.payDate).getMonth() + 1) / 3);
+
+      // Track per-employee wages
+      const existing = employeeWages.get(payroll.employeeId) || { total: 0, taxable: 0, futa: 0 };
+      const previousTotal = existing.total;
+      const newTotal = previousTotal + gross;
+
+      // Calculate taxable wages (up to FUTA wage base)
+      let taxableThisPeriod = 0;
+      if (previousTotal < futaWageBase) {
+        taxableThisPeriod = Math.min(gross, futaWageBase - previousTotal);
+      }
+
+      employeeWages.set(payroll.employeeId, {
+        total: newTotal,
+        taxable: existing.taxable + taxableThisPeriod,
+        futa: existing.futa + futa
+      });
+
+      quarterlyFuta[quarter] += futa;
+      quarterlyWages[quarter] += gross;
+    }
+
+    // Calculate totals
+    let totalWages = 0;
+    let totalFutaTaxableWages = 0;
+    let totalFutaTax = 0;
+
+    for (const [, data] of employeeWages) {
+      totalWages += data.total;
+      totalFutaTaxableWages += data.taxable;
+      totalFutaTax += data.futa;
+    }
+
+    // FUTA tax rate is 6.0%, but most employers get a 5.4% credit for paying state unemployment
+    // Net FUTA rate is typically 0.6%
+    const futaGrossRate = 0.06;
+    const stateUnemploymentCredit = 0.054; // Maximum credit
+    const futaNetRate = futaGrossRate - stateUnemploymentCredit;
+
+    // Calculate expected FUTA (at net rate)
+    const expectedFutaTax = round(totalFutaTaxableWages * futaNetRate);
+
+    // Employees who exceeded wage base
+    const employeesExceedingBase = Array.from(employeeWages.entries())
+      .filter(([, data]) => data.total > futaWageBase)
+      .length;
+
+    // Count unique employees
+    const totalEmployees = employeeWages.size;
+
+    // Quarterly liability breakdown
+    const quarterlyLiability = [1, 2, 3, 4].map(q => ({
+      quarter: q,
+      totalWages: round(quarterlyWages[q]),
+      futaTax: round(quarterlyFuta[q]),
+      cumulativeFuta: round([1, 2, 3, 4].slice(0, q).reduce((sum, qtr) => sum + quarterlyFuta[qtr], 0))
+    }));
+
+    // Form 940 line items
+    const form940 = {
+      // Part 1: Tell us about your return
+      taxYear: query.year,
+      stateCode: company.state,
+
+      // Part 2: Determine your FUTA tax before adjustments
+      line3_totalPayments: round(totalWages),
+      line4_exemptPayments: 0, // Would need to track exempt payments
+      line5_totalExempt: 0,
+      line6_totalTaxableWages: round(totalFutaTaxableWages),
+      line7_futaTaxBeforeAdjustments: round(totalFutaTaxableWages * futaGrossRate),
+
+      // Part 3: Determine your adjustments
+      line9_stateUnemploymentCredit: round(totalFutaTaxableWages * stateUnemploymentCredit),
+      line10_creditReductionStates: 0, // Credit reduction for states with outstanding loans
+
+      // Part 4: Determine your FUTA tax and balance due
+      line12_totalFutaTax: round(totalFutaTax),
+      line13_depositsForYear: round(totalFutaTax), // Assumes all deposited
+      line14_balanceDue: 0,
+      line15_overpayment: 0,
+
+      // Part 5: Report your FUTA tax liability by quarter
+      quarterlyLiability
+    };
+
+    res.json({
+      form: '940',
+      formTitle: "Employer's Annual Federal Unemployment (FUTA) Tax Return",
+      taxYear: query.year,
+
+      company: {
+        name: company.name,
+        ein: company.ein,
+        address: `${company.address}, ${company.city}, ${company.state} ${company.zipCode}`,
+        sutaRate: company.sutaRate ? Number(company.sutaRate) : null
+      },
+
+      summary: {
+        totalEmployees,
+        employeesExceedingWageBase: employeesExceedingBase,
+        futaWageBase,
+        totalWages: round(totalWages),
+        totalFutaTaxableWages: round(totalFutaTaxableWages),
+        wagesExceedingBase: round(totalWages - totalFutaTaxableWages),
+        futaGrossRate: `${(futaGrossRate * 100).toFixed(1)}%`,
+        stateUnemploymentCredit: `${(stateUnemploymentCredit * 100).toFixed(1)}%`,
+        futaNetRate: `${(futaNetRate * 100).toFixed(1)}%`,
+        totalFutaTax: round(totalFutaTax),
+        expectedFutaTax
+      },
+
+      form940,
+
+      quarterlyBreakdown: quarterlyLiability,
+
+      // Deposit schedule: FUTA deposits due by end of month following quarter
+      // if liability exceeds $500
+      depositSchedule: [
+        { quarter: 1, dueDate: `${query.year}-04-30`, liability: round(quarterlyFuta[1]) },
+        { quarter: 2, dueDate: `${query.year}-07-31`, liability: round(quarterlyFuta[2]) },
+        { quarter: 3, dueDate: `${query.year}-10-31`, liability: round(quarterlyFuta[3]) },
+        { quarter: 4, dueDate: `${query.year + 1}-01-31`, liability: round(quarterlyFuta[4]) }
+      ],
+
+      filingDeadline: `${query.year + 1}-01-31`,
+      notes: [
+        'Form 940 is due January 31 following the tax year',
+        'If all FUTA tax was deposited on time, you have until February 10 to file',
+        `FUTA wage base for ${query.year}: $${futaWageBase.toLocaleString()}`,
+        'Deposit FUTA tax quarterly if liability exceeds $500'
+      ]
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: error.errors });
+    }
+    logger.error('Error generating Form 940:', error);
+    res.status(500).json({ error: 'Failed to generate Form 940' });
   }
 });
 

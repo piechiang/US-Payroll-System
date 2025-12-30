@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
 import { ZodError } from 'zod';
 import crypto from 'crypto';
+import { logger } from '../services/logger.js';
 
 /**
  * Error Handler Middleware
@@ -201,8 +202,8 @@ export function errorHandler(
     message = 'Token expired';
   }
 
-  // Log full error details server-side
-  console.error(`[${errorRef}] ${errorType}:`, {
+  // Log full error details server-side (sanitized)
+  logger.error(`[${errorRef}] ${errorType}:`, {
     message: err.message,
     stack: err.stack,
     path: req.path,

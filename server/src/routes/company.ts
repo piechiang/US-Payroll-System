@@ -2,13 +2,26 @@ import { Router, Response } from 'express';
 import { prisma } from '../index.js';
 import { z } from 'zod';
 import { AuthRequest, filterByAccessibleCompanies, hasCompanyAccess, authorizeRoles } from '../middleware/auth.js';
+import { logger } from '../services/logger.js';
 
 const router = Router();
 
 // Validation schemas
+// optionalPercentNumber: handles numeric strings, empty strings, and null
+// - Empty string '' -> null (to clear the field)
+// - null -> null (explicit null to clear the field)
+// - Numeric string "5" -> 5 (coerce to number)
+// - Number 5 -> 5 (pass through)
 const optionalPercentNumber = z.preprocess(
-  (value) => (value === '' || value === null ? undefined : value),
-  z.number().min(0).max(100).optional()
+  (value) => {
+    if (value === '' || value === null) return null;
+    if (typeof value === 'string') {
+      const parsed = parseFloat(value);
+      return isNaN(parsed) ? value : parsed; // Return original if not a valid number for better error message
+    }
+    return value;
+  },
+  z.number().min(0).max(100).nullable().optional()
 );
 
 const baseCompanySchema = z.object({
@@ -77,7 +90,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 
     res.json(companies);
   } catch (error) {
-    console.error('Error fetching companies:', error);
+    logger.error('Error fetching companies:', error);
     res.status(500).json({ error: 'Failed to fetch companies' });
   }
 });
@@ -114,7 +127,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 
     res.json(company);
   } catch (error) {
-    console.error('Error fetching company:', error);
+    logger.error('Error fetching company:', error);
     res.status(500).json({ error: 'Failed to fetch company' });
   }
 });
@@ -158,7 +171,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: error.errors });
     }
-    console.error('Error creating company:', error);
+    logger.error('Error creating company:', error);
     res.status(500).json({ error: 'Failed to create company' });
   }
 });
@@ -214,7 +227,7 @@ router.put('/:id', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: error.errors });
     }
-    console.error('Error updating company:', error);
+    logger.error('Error updating company:', error);
     res.status(500).json({ error: 'Failed to update company' });
   }
 });
@@ -249,7 +262,7 @@ router.delete('/:id', authorizeRoles('ADMIN'), async (req: AuthRequest, res: Res
 
     res.json({ message: 'Company deactivated', company });
   } catch (error) {
-    console.error('Error deactivating company:', error);
+    logger.error('Error deactivating company:', error);
     res.status(500).json({ error: 'Failed to deactivate company' });
   }
 });

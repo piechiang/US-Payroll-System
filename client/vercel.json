@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://us-payroll-system-server.vercel.app/api/$1"
+    }
+  ]
+}

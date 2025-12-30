@@ -39,6 +39,12 @@ interface PayrollPreview {
   netPay: number
 }
 
+interface Company {
+  id: string
+  name: string
+  companyRole?: string
+}
+
 export default function RunPayroll() {
   const [selectedCompany, setSelectedCompany] = useState('')
   const [payPeriodStart, setPayPeriodStart] = useState('')
@@ -49,7 +55,7 @@ export default function RunPayroll() {
   const [step, setStep] = useState<'setup' | 'preview' | 'complete'>('setup')
 
   // Fetch companies
-  const { data: companies = [] } = useQuery({
+  const { data: companies = [] } = useQuery<Company[]>({
     queryKey: ['companies'],
     queryFn: () => api.get('/companies').then(res => res.data)
   })
@@ -122,6 +128,7 @@ export default function RunPayroll() {
   const totalGross = previews.reduce((sum, p) => sum + p.earnings.grossPay, 0)
   const totalNet = previews.reduce((sum, p) => sum + p.netPay, 0)
   const totalDeductions = previews.reduce((sum, p) => sum + p.totalDeductions, 0)
+  const selectedCompanyRole = companies.find(company => company.id === selectedCompany)?.companyRole
 
   return (
     <div>
@@ -146,10 +153,18 @@ export default function RunPayroll() {
                   className="input"
                 >
                   <option value="">Select a company</option>
-                  {companies.map((company: { id: string; name: string }) => (
+                  {companies.map((company) => (
                     <option key={company.id} value={company.id}>{company.name}</option>
                   ))}
                 </select>
+                {selectedCompany && (
+                  <p className="mt-2 text-xs text-gray-500">
+                    Role for selected company:{' '}
+                    <span className="font-medium text-gray-700">
+                      {selectedCompanyRole || 'VIEWER'}
+                    </span>
+                  </p>
+                )}
               </div>
               <div />
               <div>

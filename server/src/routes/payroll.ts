@@ -4,7 +4,7 @@ import { prisma } from '../index.js';
 import { z } from 'zod';
 import { PayrollCalculator, PayrollResult, UnsupportedStateError, isStateSupported } from '../services/payrollCalculator.js';
 import { generatePaystubPDF } from '../services/paystubGenerator.js';
-import { AuthRequest, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
+import { AuthRequest, authorizeCompanyRole, hasCompanyAccess } from '../middleware/auth.js';
 import { getSupportedStates } from '../tax/state/index.js';
 import { payrollRunLimiter, exportLimiter } from '../middleware/rateLimit.js';
 import { logPayrollOperation } from '../services/auditLog.js';
@@ -125,7 +125,7 @@ router.post('/calculate', async (req: AuthRequest, res: Response) => {
 // Uses database transaction to ensure all-or-nothing processing
 // Role restriction: Only ADMIN, ACCOUNTANT, or MANAGER can run payroll
 // Concurrency control: Prevents duplicate payroll runs for same period
-router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.post('/run', payrollRunLimiter, authorizeCompanyRole('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   let lockId: string | undefined;
 
   try {

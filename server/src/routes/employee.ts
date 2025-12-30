@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { prisma } from '../index.js';
 import { z } from 'zod';
-import { AuthRequest, filterByAccessibleCompanies, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
+import { AuthRequest, filterByAccessibleCompanies, authorizeCompanyRole, hasCompanyAccess, isRoleAllowed } from '../middleware/auth.js';
 import { encrypt, decrypt, maskSSN, hashSSN, isEncrypted, encryptIfNeeded } from '../services/encryption.js';
 import { MARYLAND_LOCAL_TAX_INFO } from '../tax/local/baltimore.js';
 import { logEmployeeAccess, logSensitiveAccess } from '../services/auditLog.js';
@@ -365,7 +365,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 // POST /api/employees - Create new employee
 // Multi-tenant: Verifies user has access to the target company
 // Role restriction: Only ADMIN, ACCOUNTANT, or MANAGER can create employees
-router.post('/', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.post('/', authorizeCompanyRole('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   try {
     const data = createEmployeeSchema.parse(req.body);
 
@@ -465,7 +465,7 @@ router.post('/', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: A
 // PUT /api/employees/:id - Update employee
 // Multi-tenant: Verifies user has access to the employee's company
 // Role restriction: Only ADMIN, ACCOUNTANT, or MANAGER can update employees
-router.put('/:id', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.put('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const data = updateEmployeeSchema.parse(req.body);
 
@@ -493,9 +493,24 @@ router.put('/:id', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
     if (!hasCompanyAccess(req, existingEmployee.companyId)) {
       return res.status(403).json({ error: 'Access denied to this employee' });
     }
+
+    if (!isRoleAllowed(req, ['ADMIN', 'ACCOUNTANT', 'MANAGER'], existingEmployee.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN, ACCOUNTANT, MANAGER'
+      });
+    }
     // Also check target company if changing
     if (data.companyId && !hasCompanyAccess(req, data.companyId)) {
       return res.status(403).json({ error: 'Access denied to target company' });
+    }
+    if (data.companyId && data.companyId !== existingEmployee.companyId) {
+      if (!isRoleAllowed(req, ['ADMIN', 'ACCOUNTANT', 'MANAGER'], data.companyId)) {
+        return res.status(403).json({
+          error: 'Access denied',
+          message: 'This action requires one of the following roles: ADMIN, ACCOUNTANT, MANAGER'
+        });
+      }
     }
 
     // Validate pay rate limits if pay rate or pay type is being updated
@@ -683,7 +698,7 @@ router.put('/:id', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
 // DELETE /api/employees/:id - Soft delete (deactivate) employee
 // Multi-tenant: Verifies user has access to the employee's company
 // Role restriction: Only ADMIN or MANAGER can deactivate employees
-router.delete('/:id', authorizeRoles('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.delete('/:id', async (req: AuthRequest, res: Response) => {
   try {
     // First fetch the employee to check company access
     const existingEmployee = await prisma.employee.findUnique({
@@ -699,6 +714,12 @@ router.delete('/:id', authorizeRoles('ADMIN', 'MANAGER'), async (req: AuthReques
     // SECURITY: Uses hasCompanyAccess which properly handles empty accessibleCompanyIds
     if (!hasCompanyAccess(req, existingEmployee.companyId)) {
       return res.status(403).json({ error: 'Access denied to this employee' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN', 'MANAGER'], existingEmployee.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN, MANAGER'
+      });
     }
 
     const employee = await prisma.employee.update({

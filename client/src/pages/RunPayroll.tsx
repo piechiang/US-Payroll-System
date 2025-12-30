@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { DollarSign, Calculator, Check } from 'lucide-react'
 import { api } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 interface Employee {
   id: string
@@ -40,7 +41,7 @@ interface PayrollPreview {
 }
 
 export default function RunPayroll() {
-  const [selectedCompany, setSelectedCompany] = useState('')
+  const { companyId, companies } = useAuth()
   const [payPeriodStart, setPayPeriodStart] = useState('')
   const [payPeriodEnd, setPayPeriodEnd] = useState('')
   const [payDate, setPayDate] = useState('')
@@ -48,17 +49,11 @@ export default function RunPayroll() {
   const [previews, setPreviews] = useState<PayrollPreview[]>([])
   const [step, setStep] = useState<'setup' | 'preview' | 'complete'>('setup')
 
-  // Fetch companies
-  const { data: companies = [] } = useQuery({
-    queryKey: ['companies'],
-    queryFn: () => api.get('/companies').then(res => res.data)
-  })
-
   // Fetch employees for selected company
   const { data: employees = [] } = useQuery<Employee[]>({
-    queryKey: ['employees', selectedCompany],
-    queryFn: () => api.get(`/employees?companyId=${selectedCompany}`).then(res => res.data),
-    enabled: !!selectedCompany
+    queryKey: ['employees', companyId],
+    queryFn: () => api.get(`/employees?companyId=${companyId}`).then(res => res.data),
+    enabled: Boolean(companyId)
   })
 
   // Calculate preview mutation
@@ -87,7 +82,7 @@ export default function RunPayroll() {
   // Run payroll mutation
   const runPayrollMutation = useMutation({
     mutationFn: () => api.post('/payroll/run', {
-      companyId: selectedCompany,
+      companyId,
       payPeriodStart,
       payPeriodEnd,
       payDate,
@@ -140,16 +135,9 @@ export default function RunPayroll() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
                 <label className="label">Company *</label>
-                <select
-                  value={selectedCompany}
-                  onChange={(e) => setSelectedCompany(e.target.value)}
-                  className="input"
-                >
-                  <option value="">Select a company</option>
-                  {companies.map((company: { id: string; name: string }) => (
-                    <option key={company.id} value={company.id}>{company.name}</option>
-                  ))}
-                </select>
+                <div className="input bg-gray-50 flex items-center">
+                  {companies.find((company) => company.id === companyId)?.name || 'Select a company'}
+                </div>
               </div>
               <div />
               <div>
@@ -238,7 +226,7 @@ export default function RunPayroll() {
           <div className="flex justify-end">
             <button
               onClick={() => calculateMutation.mutate()}
-              disabled={!selectedCompany || !payPeriodStart || !payPeriodEnd || !payDate || calculateMutation.isPending}
+              disabled={!companyId || !payPeriodStart || !payPeriodEnd || !payDate || calculateMutation.isPending}
               className="btn-primary"
             >
               <Calculator className="w-4 h-4 mr-2" />

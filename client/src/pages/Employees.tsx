@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Search, Edit, Trash2 } from 'lucide-react'
 import { api } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 interface Employee {
   id: string
@@ -21,10 +22,12 @@ interface Employee {
 
 export default function Employees() {
   const [searchTerm, setSearchTerm] = useState('')
+  const { companyId } = useAuth()
 
   const { data: employees = [], isLoading } = useQuery<Employee[]>({
-    queryKey: ['employees'],
-    queryFn: () => api.get('/employees').then(res => res.data)
+    queryKey: ['employees', companyId],
+    queryFn: () => api.get(`/employees?companyId=${companyId}`).then(res => res.data),
+    enabled: Boolean(companyId),
   })
 
   const filteredEmployees = employees.filter(emp =>

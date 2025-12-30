@@ -1,13 +1,19 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 export default function Login() {
   const nav = useNavigate()
+  const location = useLocation()
+  const { setToken, setUser, setCompanyId } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const from =
+    (location.state as { from?: { pathname?: string } })?.from?.pathname ||
+    '/dashboard'
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -22,8 +28,12 @@ export default function Login() {
         throw new Error('Login response did not include token')
       }
 
-      localStorage.setItem('token', token)
-      nav('/dashboard', { replace: true })
+      setToken(token)
+      if (res.data?.user) {
+        setUser(res.data.user)
+      }
+      setCompanyId('')
+      nav(from, { replace: true })
     } catch (error: any) {
       const msg =
         error?.response?.data?.message ||

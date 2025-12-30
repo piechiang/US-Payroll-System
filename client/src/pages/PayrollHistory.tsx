@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { FileText, Download, Eye, Printer, Filter } from 'lucide-react'
 import { api } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 interface PayrollRecord {
   id: string
@@ -19,19 +20,15 @@ interface PayrollRecord {
   }
 }
 
-interface Company {
-  id: string
-  name: string
-}
-
 export default function PayrollHistory() {
-  const [selectedCompany, setSelectedCompany] = useState<string>('')
+  const { companies, companyId } = useAuth()
+  const [selectedCompany, setSelectedCompany] = useState<string>(companyId)
 
-  // Fetch companies for filter
-  const { data: companies = [] } = useQuery<Company[]>({
-    queryKey: ['companies'],
-    queryFn: () => api.get('/companies').then(res => res.data)
-  })
+  useEffect(() => {
+    if (companyId) {
+      setSelectedCompany(companyId)
+    }
+  }, [companyId])
 
   // Fetch payrolls
   const { data: payrolls = [], isLoading } = useQuery<PayrollRecord[]>({

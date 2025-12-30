@@ -4,6 +4,8 @@ import Dashboard from './pages/Dashboard'
 import Employees from './pages/Employees'
 import EmployeeForm from './pages/EmployeeForm'
 import Companies from './pages/Companies'
+import PayPeriods from './pages/PayPeriods'
+import PayPeriodDetail from './pages/PayPeriodDetail'
 import RunPayroll from './pages/RunPayroll'
 import PayrollHistory from './pages/PayrollHistory'
 import PaystubView from './pages/PaystubView'
@@ -20,6 +22,8 @@ function App() {
         <Route path="employees/new" element={<EmployeeForm />} />
         <Route path="employees/:id" element={<EmployeeForm />} />
         <Route path="companies" element={<Companies />} />
+        <Route path="pay-periods" element={<PayPeriods />} />
+        <Route path="pay-periods/:id" element={<PayPeriodDetail />} />
         <Route path="payroll/run" element={<RunPayroll />} />
         <Route path="payroll/history" element={<PayrollHistory />} />
         <Route path="payroll/:id" element={<PaystubView />} />

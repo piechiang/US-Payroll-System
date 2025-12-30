@@ -167,6 +167,27 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
 
     lockId = lockResult.lockId;
 
+    const existingPayPeriod = await prisma.payPeriod.findFirst({
+      where: {
+        companyId: data.companyId,
+        startDate: data.payPeriodStart,
+        endDate: data.payPeriodEnd
+      }
+    });
+
+    if (existingPayPeriod && ['PROCESSING', 'PROCESSED', 'PAID'].includes(existingPayPeriod.status)) {
+      if (lockId) {
+        await releasePayrollLock(lockId, false);
+      }
+
+      return res.status(409).json({
+        error: 'PAY_PERIOD_NOT_READY',
+        message: `Pay period is already ${existingPayPeriod.status.toLowerCase()}`,
+        payPeriodId: existingPayPeriod.id,
+        status: existingPayPeriod.status
+      });
+    }
+
     // Get all employees for the company
     const employees = await prisma.employee.findMany({
       where: {
@@ -217,6 +238,32 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
 
     // Use transaction to ensure all-or-nothing processing
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const payPeriodRecord = await tx.payPeriod.findFirst({
+        where: {
+          companyId: data.companyId,
+          startDate: data.payPeriodStart,
+          endDate: data.payPeriodEnd
+        }
+      });
+
+      const payPeriod = payPeriodRecord
+        ? await tx.payPeriod.update({
+          where: { id: payPeriodRecord.id },
+          data: {
+            payDate: data.payDate,
+            status: 'PROCESSING'
+          }
+        })
+        : await tx.payPeriod.create({
+          data: {
+            companyId: data.companyId,
+            startDate: data.payPeriodStart,
+            endDate: data.payPeriodEnd,
+            payDate: data.payDate,
+            status: 'PROCESSING'
+          }
+        });
+
       const calculator = new PayrollCalculator();
       const payrollResults: (PayrollResult & { payrollId: string; ytd: Record<string, number> })[] = [];
 
@@ -291,6 +338,7 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
           data: {
             employeeId: employee.id,
             companyId: data.companyId,
+            payPeriodId: payPeriod.id,
             payPeriodStart: data.payPeriodStart,
             payPeriodEnd: data.payPeriodEnd,
             payDate: data.payDate,
@@ -360,7 +408,17 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
         });
       }
 
-      return payrollResults;
+      await tx.payPeriod.update({
+        where: { id: payPeriod.id },
+        data: {
+          status: 'PROCESSED'
+        }
+      });
+
+      return {
+        payrollResults,
+        payPeriodId: payPeriod.id
+      };
     });
 
     // Release lock on success
@@ -373,27 +431,28 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
       payDate: data.payDate.toISOString(),
       payPeriodStart: data.payPeriodStart.toISOString(),
       payPeriodEnd: data.payPeriodEnd.toISOString(),
-      employeeCount: result.length,
-      totalGrossPay: result.reduce((sum, r) => sum + r.earnings.grossPay, 0),
-      totalNetPay: result.reduce((sum, r) => sum + r.netPay, 0),
+      employeeCount: result.payrollResults.length,
+      totalGrossPay: result.payrollResults.reduce((sum, r) => sum + r.earnings.grossPay, 0),
+      totalNetPay: result.payrollResults.reduce((sum, r) => sum + r.netPay, 0),
     });
 
     res.status(201).json({
       message: 'Payroll processed successfully',
+      payPeriodId: result.payPeriodId,
       payDate: data.payDate,
       payPeriod: {
         start: data.payPeriodStart,
         end: data.payPeriodEnd
       },
-      results: result,
+      results: result.payrollResults,
       summary: {
-        totalEmployees: result.length,
-        totalGrossPay: result.reduce((sum, r) => sum + r.earnings.grossPay, 0),
-        totalNetPay: result.reduce((sum, r) => sum + r.netPay, 0),
-        totalEmployeeTaxes: result.reduce((sum, r) => sum + r.totalEmployeeTaxes, 0),
-        totalEmployeeDeductions: result.reduce((sum, r) => sum + r.totalDeductions, 0),
-        totalEmployerTaxes: result.reduce((sum, r) => sum + r.employerTaxes.total, 0),
-        totalEmployerCost: result.reduce((sum, r) => sum + r.totalEmployerCost, 0)
+        totalEmployees: result.payrollResults.length,
+        totalGrossPay: result.payrollResults.reduce((sum, r) => sum + r.earnings.grossPay, 0),
+        totalNetPay: result.payrollResults.reduce((sum, r) => sum + r.netPay, 0),
+        totalEmployeeTaxes: result.payrollResults.reduce((sum, r) => sum + r.totalEmployeeTaxes, 0),
+        totalEmployeeDeductions: result.payrollResults.reduce((sum, r) => sum + r.totalDeductions, 0),
+        totalEmployerTaxes: result.payrollResults.reduce((sum, r) => sum + r.employerTaxes.total, 0),
+        totalEmployerCost: result.payrollResults.reduce((sum, r) => sum + r.totalEmployerCost, 0)
       }
     });
   } catch (error) {

@@ -14,6 +14,7 @@ import { logger } from './services/logger.js';
 import employeeRoutes from './routes/employee.js';
 import companyRoutes from './routes/company.js';
 import payrollRoutes from './routes/payroll.js';
+import payPeriodRoutes from './routes/payPeriods.js';
 import authRoutes from './routes/auth.js';
 import taxInfoRoutes from './routes/taxInfo.js';
 import taxLiabilityRoutes from './routes/taxLiability.js';
@@ -232,6 +233,7 @@ if (REQUIRE_AUTH) {
     registerRoutes('employees', [authenticate, csrfProtection], employeeRoutes);
     registerRoutes('companies', [authenticate, csrfProtection], companyRoutes);
     registerRoutes('payroll', [authenticate, csrfProtection], payrollRoutes);
+    registerRoutes('pay-periods', [authenticate, csrfProtection], payPeriodRoutes);
     registerRoutes('tax-info', [authenticate], taxInfoRoutes); // Read-only, no CSRF needed
     registerRoutes('tax-liability', [authenticate], taxLiabilityRoutes); // Read-only reports
     registerRoutes('w2', [authenticate, csrfProtection], w2Routes);
@@ -242,6 +244,7 @@ if (REQUIRE_AUTH) {
     registerRoutes('employees', [authenticate], employeeRoutes);
     registerRoutes('companies', [authenticate], companyRoutes);
     registerRoutes('payroll', [authenticate], payrollRoutes);
+    registerRoutes('pay-periods', [authenticate], payPeriodRoutes);
     registerRoutes('tax-info', [authenticate], taxInfoRoutes);
     registerRoutes('tax-liability', [authenticate], taxLiabilityRoutes);
     registerRoutes('w2', [authenticate], w2Routes);
@@ -254,6 +257,7 @@ if (REQUIRE_AUTH) {
   registerRoutes('employees', [], employeeRoutes);
   registerRoutes('companies', [], companyRoutes);
   registerRoutes('payroll', [], payrollRoutes);
+  registerRoutes('pay-periods', [], payPeriodRoutes);
   registerRoutes('tax-info', [], taxInfoRoutes);
   registerRoutes('tax-liability', [], taxLiabilityRoutes);
   registerRoutes('w2', [], w2Routes);

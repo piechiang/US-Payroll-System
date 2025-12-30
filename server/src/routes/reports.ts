@@ -10,6 +10,13 @@ import {
   generateEmployeeEarningsReport,
   ReportFilters,
 } from '../services/reportGenerator.js';
+import {
+  generateLaborCostAnalysis,
+  generateOvertimeAnalysis,
+  generate401kReport,
+} from '../services/advancedReports.js';
+import { generateForm941, getCurrentQuarter } from '../services/form941Generator.js';
+import { generateForm940 } from '../services/form940Generator.js';
 import { logAudit } from '../services/auditLog.js';
 import { logger } from '../services/logger.js';
 
@@ -393,6 +400,197 @@ router.post('/export/csv', async (req, res) => {
   } catch (error) {
     logger.error('Failed to export CSV', { error });
     res.status(500).json({ error: 'Failed to export CSV' });
+  }
+});
+
+/**
+ * Generate Form 941 (Quarterly Federal Tax Return)
+ */
+router.post('/form-941', async (req, res) => {
+  try {
+    const { companyId, year, quarter } = req.body;
+    const user = (req as any).user;
+
+    if (!companyId || !year || !quarter) {
+      return res.status(400).json({ error: 'Company ID, year, and quarter are required' });
+    }
+
+    if (![1, 2, 3, 4].includes(quarter)) {
+      return res.status(400).json({ error: 'Quarter must be 1, 2, 3, or 4' });
+    }
+
+    const form = await generateForm941(companyId, parseInt(year), quarter);
+
+    await logAudit({
+      userId: user?.id || 'anonymous',
+      userEmail: user?.email || 'anonymous',
+      userRole: user?.role || 'VIEWER',
+      action: 'EXPORT',
+      resource: 'REPORT',
+      resourceId: 'form-941',
+      companyId,
+      description: `Generated Form 941 for Q${quarter} ${year}`,
+      metadata: JSON.stringify({ year, quarter }),
+      ipAddress: req.ip || req.connection.remoteAddress,
+      userAgent: req.headers['user-agent'],
+      success: true,
+    });
+
+    res.json(form);
+  } catch (error) {
+    logger.error('Failed to generate Form 941', { error });
+    res.status(500).json({ error: 'Failed to generate Form 941' });
+  }
+});
+
+/**
+ * Generate Form 940 (Annual FUTA Tax Return)
+ */
+router.post('/form-940', async (req, res) => {
+  try {
+    const { companyId, year } = req.body;
+    const user = (req as any).user;
+
+    if (!companyId || !year) {
+      return res.status(400).json({ error: 'Company ID and year are required' });
+    }
+
+    const form = await generateForm940(companyId, parseInt(year));
+
+    await logAudit({
+      userId: user?.id || 'anonymous',
+      userEmail: user?.email || 'anonymous',
+      userRole: user?.role || 'VIEWER',
+      action: 'EXPORT',
+      resource: 'REPORT',
+      resourceId: 'form-940',
+      companyId,
+      description: `Generated Form 940 for ${year}`,
+      metadata: JSON.stringify({ year }),
+      ipAddress: req.ip || req.connection.remoteAddress,
+      userAgent: req.headers['user-agent'],
+      success: true,
+    });
+
+    res.json(form);
+  } catch (error) {
+    logger.error('Failed to generate Form 940', { error });
+    res.status(500).json({ error: 'Failed to generate Form 940' });
+  }
+});
+
+/**
+ * Generate Labor Cost Analysis Report
+ */
+router.post('/labor-cost-analysis', async (req, res) => {
+  try {
+    const { companyId, startDate, endDate } = req.body;
+    const user = (req as any).user;
+
+    if (!companyId || !startDate || !endDate) {
+      return res.status(400).json({ error: 'Company ID, start date, and end date are required' });
+    }
+
+    const report = await generateLaborCostAnalysis(
+      companyId,
+      new Date(startDate),
+      new Date(endDate)
+    );
+
+    await logAudit({
+      userId: user?.id || 'anonymous',
+      userEmail: user?.email || 'anonymous',
+      userRole: user?.role || 'VIEWER',
+      action: 'EXPORT',
+      resource: 'REPORT',
+      resourceId: 'labor-cost-analysis',
+      companyId,
+      description: 'Generated labor cost analysis report',
+      metadata: JSON.stringify({ startDate, endDate }),
+      ipAddress: req.ip || req.connection.remoteAddress,
+      userAgent: req.headers['user-agent'],
+      success: true,
+    });
+
+    res.json(report);
+  } catch (error) {
+    logger.error('Failed to generate labor cost analysis', { error });
+    res.status(500).json({ error: 'Failed to generate labor cost analysis' });
+  }
+});
+
+/**
+ * Generate Overtime Analysis Report
+ */
+router.post('/overtime-analysis', async (req, res) => {
+  try {
+    const { companyId, startDate, endDate } = req.body;
+    const user = (req as any).user;
+
+    if (!companyId || !startDate || !endDate) {
+      return res.status(400).json({ error: 'Company ID, start date, and end date are required' });
+    }
+
+    const report = await generateOvertimeAnalysis(
+      companyId,
+      new Date(startDate),
+      new Date(endDate)
+    );
+
+    await logAudit({
+      userId: user?.id || 'anonymous',
+      userEmail: user?.email || 'anonymous',
+      userRole: user?.role || 'VIEWER',
+      action: 'EXPORT',
+      resource: 'REPORT',
+      resourceId: 'overtime-analysis',
+      companyId,
+      description: 'Generated overtime analysis report',
+      metadata: JSON.stringify({ startDate, endDate }),
+      ipAddress: req.ip || req.connection.remoteAddress,
+      userAgent: req.headers['user-agent'],
+      success: true,
+    });
+
+    res.json(report);
+  } catch (error) {
+    logger.error('Failed to generate overtime analysis', { error });
+    res.status(500).json({ error: 'Failed to generate overtime analysis' });
+  }
+});
+
+/**
+ * Generate 401(k) Participation Report
+ */
+router.post('/401k-report', async (req, res) => {
+  try {
+    const { companyId } = req.body;
+    const user = (req as any).user;
+
+    if (!companyId) {
+      return res.status(400).json({ error: 'Company ID is required' });
+    }
+
+    const report = await generate401kReport(companyId);
+
+    await logAudit({
+      userId: user?.id || 'anonymous',
+      userEmail: user?.email || 'anonymous',
+      userRole: user?.role || 'VIEWER',
+      action: 'EXPORT',
+      resource: 'REPORT',
+      resourceId: '401k-report',
+      companyId,
+      description: 'Generated 401k participation report',
+      ipAddress: req.ip || req.connection.remoteAddress,
+      userAgent: req.headers['user-agent'],
+      success: true,
+    });
+
+    res.json(report);
+  } catch (error) {
+    logger.error('Failed to generate 401k report', { error });
+    res.status(500).json({ error: 'Failed to generate 401k report' });
   }
 });
 

@@ -1,17 +1,17 @@
 // Prisma Schema for US Payroll System
-// Database: SQLite (for development)
+// Database: PostgreSQL (production)
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ============ MODELS ============
-// Note: SQLite doesn't support enums, so we use String with validation in app code
 
 model User {
   id        String   @id @default(cuid())

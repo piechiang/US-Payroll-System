@@ -290,75 +290,81 @@ function checkDatabaseConfig(): void {
   }
 }
 
-// Start server
-async function main() {
-  try {
-    // Check database configuration
-    checkDatabaseConfig();
+// Export app for Vercel serverless
+export default app;
 
-    await prisma.$connect();
-    logger.info('Connected to database');
+// Only start server in non-serverless environment (local development)
+if (process.env.VERCEL !== '1') {
+  // Start server
+  async function main() {
+    try {
+      // Check database configuration
+      checkDatabaseConfig();
 
-    const httpServer = app.listen(PORT, () => {
-      logger.info(`Server running on http://localhost:${PORT}`);
-      logger.info(`Health check: http://localhost:${PORT}/api/health`);
-    });
+      await prisma.$connect();
+      logger.info('Connected to database');
 
-    return httpServer;
-  } catch (error) {
-    logger.error('Failed to start server:', error);
-    process.exit(1);
+      const httpServer = app.listen(PORT, () => {
+        logger.info(`Server running on http://localhost:${PORT}`);
+        logger.info(`Health check: http://localhost:${PORT}/api/health`);
+      });
+
+      return httpServer;
+    } catch (error) {
+      logger.error('Failed to start server:', error);
+      process.exit(1);
+    }
   }
+
+  // Store server reference for graceful shutdown
+  let server: ReturnType<typeof app.listen> | undefined;
+
+  main().then(s => { if (s) server = s; });
+
+  // Graceful shutdown handler
+  async function gracefulShutdown(signal: string) {
+    logger.info(`${signal} received. Starting graceful shutdown...`);
+
+    // Stop accepting new connections
+    if (server) {
+      server.close(() => {
+        logger.info('HTTP server closed');
+      });
+    }
+
+    // Give existing requests time to complete (30 seconds max)
+    const shutdownTimeout = setTimeout(() => {
+      logger.warn('Shutdown timeout reached, forcing exit');
+      process.exit(1);
+    }, 30000);
+
+    try {
+      // Disconnect from database
+      await prisma.$disconnect();
+      logger.info('Database connection closed');
+
+      clearTimeout(shutdownTimeout);
+      logger.info('Graceful shutdown completed');
+      process.exit(0);
+    } catch (error) {
+      logger.error('Error during shutdown:', error);
+      clearTimeout(shutdownTimeout);
+      process.exit(1);
+    }
+  }
+
+  // Handle shutdown signals
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+  // Handle uncaught exceptions
+  process.on('uncaughtException', (error) => {
+    logger.error('Uncaught exception:', error);
+    gracefulShutdown('uncaughtException');
+  });
+
+  // Handle unhandled promise rejections
+  process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled rejection at:', { promise, reason });
+  });
 }
-
-// Store server reference for graceful shutdown
-let server: ReturnType<typeof app.listen> | undefined;
-
-main().then(s => { if (s) server = s; });
-
-// Graceful shutdown handler
-async function gracefulShutdown(signal: string) {
-  logger.info(`${signal} received. Starting graceful shutdown...`);
-
-  // Stop accepting new connections
-  if (server) {
-    server.close(() => {
-      logger.info('HTTP server closed');
-    });
-  }
-
-  // Give existing requests time to complete (30 seconds max)
-  const shutdownTimeout = setTimeout(() => {
-    logger.warn('Shutdown timeout reached, forcing exit');
-    process.exit(1);
-  }, 30000);
-
-  try {
-    // Disconnect from database
-    await prisma.$disconnect();
-    logger.info('Database connection closed');
-
-    clearTimeout(shutdownTimeout);
-    logger.info('Graceful shutdown completed');
-    process.exit(0);
-  } catch (error) {
-    logger.error('Error during shutdown:', error);
-    clearTimeout(shutdownTimeout);
-    process.exit(1);
-  }
-}
-
-// Handle shutdown signals
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  logger.error('Uncaught exception:', error);
-  gracefulShutdown('uncaughtException');
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error('Unhandled rejection at:', { promise, reason });
-});

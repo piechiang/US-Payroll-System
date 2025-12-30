@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, Edit, Trash2 } from 'lucide-react'
 import { api } from '../services/api'
 
@@ -21,6 +21,11 @@ interface Employee {
 
 export default function Employees() {
   const [searchTerm, setSearchTerm] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const queryClient = useQueryClient()
+  const apiBaseUrl = import.meta.env.VITE_API_URL || '/api'
 
   const { data: employees = [], isLoading } = useQuery<Employee[]>({
     queryKey: ['employees'],
@@ -40,6 +45,40 @@ export default function Employees() {
     return `$${rate.toLocaleString()}/yr`
   }
 
+  const handleUploadClick = () => {
+    setUploadError(null)
+    fileInputRef.current?.click()
+  }
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setUploading(true)
+    setUploadError(null)
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      await api.post('/employees/bulk-import', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      await queryClient.invalidateQueries({ queryKey: ['employees'] })
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        'Bulk import failed. Please check your file and try again.'
+      setUploadError(message)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -49,11 +88,41 @@ export default function Employees() {
             Manage your employee information and W-4 details.
           </p>
         </div>
-        <Link to="/employees/new" className="btn-primary">
-          <Plus className="w-4 h-4 mr-2" />
-          Add Employee
-        </Link>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleUploadClick}
+            className="btn-secondary"
+            disabled={uploading}
+          >
+            {uploading ? 'Importing...' : 'Bulk Import'}
+          </button>
+          <a
+            className="text-sm text-primary-600 hover:text-primary-800"
+            href={`${apiBaseUrl}/employees/export?format=csv&template=true`}
+          >
+            Download template
+          </a>
+          <Link to="/employees/new" className="btn-primary">
+            <Plus className="w-4 h-4 mr-2" />
+            Add Employee
+          </Link>
+        </div>
       </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,.xlsx"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
+      {uploadError && (
+        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          {uploadError}
+        </div>
+      )}
 
       {/* Search */}
       <div className="card mb-6">

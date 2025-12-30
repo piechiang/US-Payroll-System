@@ -6,6 +6,7 @@ import {
   DollarSign,
   History,
   Settings,
+  FileText,
 } from 'lucide-react'
 
 const navigation = [
@@ -14,6 +15,7 @@ const navigation = [
   { name: 'Companies', href: '/companies', icon: Building2 },
   { name: 'Run Payroll', href: '/payroll/run', icon: DollarSign },
   { name: 'Payroll History', href: '/payroll/history', icon: History },
+  { name: 'Reports', href: '/reports', icon: FileText },
 ]
 
 export default function Layout() {

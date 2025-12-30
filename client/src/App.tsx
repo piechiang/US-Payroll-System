@@ -8,6 +8,7 @@ import RunPayroll from './pages/RunPayroll'
 import PayrollHistory from './pages/PayrollHistory'
 import PaystubView from './pages/PaystubView'
 import Login from './pages/Login'
+import Reports from './pages/Reports'
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
         <Route path="payroll/run" element={<RunPayroll />} />
         <Route path="payroll/history" element={<PayrollHistory />} />
         <Route path="payroll/:id" element={<PaystubView />} />
+        <Route path="reports" element={<Reports />} />
       </Route>
     </Routes>
   )

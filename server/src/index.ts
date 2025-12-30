@@ -20,6 +20,8 @@ import taxLiabilityRoutes from './routes/taxLiability.js';
 import w2Routes from './routes/w2.js';
 import payrollApprovalRoutes from './routes/payrollApproval.js';
 import achRoutes from './routes/ach.js';
+import dashboardRoutes from './routes/dashboard.js';
+import reportsRoutes from './routes/reports.js';
 
 // Middleware
 import { authenticate } from './middleware/auth.js';
@@ -237,6 +239,8 @@ if (REQUIRE_AUTH) {
     registerRoutes('w2', [authenticate, csrfProtection], w2Routes);
     registerRoutes('payroll-approval', [authenticate, csrfProtection], payrollApprovalRoutes);
     registerRoutes('ach', [authenticate, csrfProtection], achRoutes);
+    registerRoutes('dashboard', [authenticate], dashboardRoutes); // Read-only, no CSRF needed
+    registerRoutes('reports', [authenticate], reportsRoutes); // Read-only, no CSRF needed
   } else {
     console.warn('⚠️  CSRF protection is DISABLED. Set DISABLE_CSRF=false for production.');
     registerRoutes('employees', [authenticate], employeeRoutes);
@@ -247,6 +251,8 @@ if (REQUIRE_AUTH) {
     registerRoutes('w2', [authenticate], w2Routes);
     registerRoutes('payroll-approval', [authenticate], payrollApprovalRoutes);
     registerRoutes('ach', [authenticate], achRoutes);
+    registerRoutes('dashboard', [authenticate], dashboardRoutes);
+    registerRoutes('reports', [authenticate], reportsRoutes);
   }
 } else {
   // Development mode - no auth required
@@ -259,6 +265,8 @@ if (REQUIRE_AUTH) {
   registerRoutes('w2', [], w2Routes);
   registerRoutes('payroll-approval', [], payrollApprovalRoutes);
   registerRoutes('ach', [], achRoutes);
+  registerRoutes('dashboard', [], dashboardRoutes);
+  registerRoutes('reports', [], reportsRoutes);
 }
 
 // CSRF error handling middleware

@@ -22,6 +22,7 @@ model User {
 
   // Multi-tenant: user can access multiple companies
   companyAccess CompanyAccess[]
+  auditLogs     AuditLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -86,6 +87,8 @@ model Company {
   payPeriods  PayPeriod[]
   userAccess  CompanyAccess[]
   w2Forms     W2Form[]
+  payrollRuns PayrollRun[]
+  contractors Contractor[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -111,6 +114,9 @@ model Employee {
   department      String?
   jobTitle        String?
   isActive        Boolean  @default(true)
+
+  // Garnishments
+  garnishments    Garnishment[]
 
   // Compensation
   payType String  // HOURLY, SALARY
@@ -156,6 +162,26 @@ model Employee {
   @@index([companyId])
   @@index([lastName, firstName])
   @@map("employees")
+}
+
+model Garnishment {
+  id            String   @id @default(cuid())
+  employeeId    String
+  employee      Employee @relation(fields: [employeeId], references: [id])
+  
+  description   String   // e.g., "Child Support Case #123"
+  type          String   // CHILD_SUPPORT, TAX_LEVY, CREDITOR_GARNISHMENT
+  amount        Decimal  // Fixed amount
+  percent       Decimal? // Or percentage of disposable income
+  totalOwed     Decimal? // Total debt (if applicable)
+  totalPaid     Decimal  @default(0) // Total amount paid so far
+  active        Boolean  @default(true)
+  priority      Int      @default(1) // Calculation priority
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("garnishments")
 }
 
 model PayPeriod {
@@ -275,6 +301,7 @@ model Payroll {
 
   @@unique([employeeId, payPeriodStart, payPeriodEnd]) // Prevent duplicate payrolls for same period
   @@index([employeeId, payDate])
+  @@index([companyId, payPeriodStart, payPeriodEnd]) // Performance optimization for reports
   @@index([companyId, payDate])
   @@map("payrolls")
 }
@@ -285,37 +312,32 @@ model AuditLog {
   id        String   @id @default(cuid())
 
   // Who performed the action
-  userId    String?  // null for system actions
-  userEmail String?  // Denormalized for quick access
-  userRole  String?  // Role at time of action
+  userId    String   // User who performed the action
+  companyId String   // Company context
 
   // What was accessed/modified
-  action      String   // VIEW, CREATE, UPDATE, DELETE, EXPORT, LOGIN, LOGOUT
-  resource    String   // EMPLOYEE, PAYROLL, COMPANY, USER, SSN, BANK_ACCOUNT
-  resourceId  String?  // ID of the specific resource
-  companyId   String?  // For multi-tenant filtering
+  action      String   // CREATE, UPDATE, DELETE, VIEW, EXPORT, APPROVE, REJECT
+  entity      String   // EMPLOYEE, PAYROLL, COMPANY, TAX_INFO, W2_FORM, GARNISHMENT, CONTRACTOR
+  entityId    String   // ID of the specific resource
 
   // Details
-  description String?  // Human-readable description
+  changes     String?  // JSON string for before/after values
   metadata    String?  // JSON string for additional context
-
-  // Where (client info)
-  ipAddress   String?
-  userAgent   String?
-
-  // Outcome
-  success     Boolean  @default(true)
-  errorMessage String?
+  requestId   String?  // Request tracking ID
 
   // When
+  timestamp   DateTime @default(now())
   createdAt   DateTime @default(now())
 
+  // Relations
+  user        User     @relation(fields: [userId], references: [id])
+
   @@index([userId])
-  @@index([action])
-  @@index([resource])
-  @@index([resourceId])
   @@index([companyId])
-  @@index([createdAt])
+  @@index([action])
+  @@index([entity])
+  @@index([entityId])
+  @@index([timestamp])
   @@map("audit_logs")
 }
 
@@ -446,4 +468,123 @@ model W2Form {
   @@unique([employeeId, taxYear]) // One W-2 per employee per year
   @@index([companyId, taxYear])
   @@map("w2_forms")
+}
+
+// Tax Configuration for dynamic tax rate management
+// Allows updating tax rates without code changes
+model TaxConfiguration {
+  id            String   @id @default(cuid())
+  jurisdiction  String   // "FEDERAL", "CA", "NY", "MD", etc.
+  taxYear       Int      // 2024, 2025, etc.
+  type          String   // "INCOME_TAX", "SDI", "SUTA", "FUTA", etc.
+
+  // JSON fields for flexible configuration
+  brackets      Json?    // Tax brackets array for progressive taxes
+  rates         Json?    // Fixed rates (SS, Medicare, SDI, etc.)
+  deductions    Json?    // Standard deductions by filing status
+  caps          Json?    // Wage caps (SS wage base, SDI max, etc.)
+  credits       Json?    // Tax credits (dependent, EITC, etc.)
+
+  // Metadata
+  effectiveDate DateTime // When this config becomes active
+  expiresDate   DateTime? // When this config is no longer valid
+  description   String?  // Human-readable description
+  source        String?  // Reference (e.g., "IRS Publication 15-T 2024")
+
+  isActive      Boolean  @default(true)
+  createdBy     String?  // User who created this config
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([jurisdiction, taxYear, type])
+  @@index([jurisdiction, taxYear])
+  @@index([effectiveDate])
+  @@index([isActive])
+  @@map("tax_configurations")
+}
+
+// Async Payroll Run tracking
+// Supports background processing with progress updates
+model PayrollRun {
+  id        String   @id @default(cuid())
+  companyId String
+
+  // Pay period details
+  payPeriodStart DateTime
+  payPeriodEnd   DateTime
+  payDate        DateTime
+
+  // Progress tracking
+  status          String   @default("QUEUED") // QUEUED, PROCESSING, COMPLETED, FAILED, CANCELLED
+  progress        Int      @default(0) // 0-100 percentage
+  processedCount  Int      @default(0) // Number of employees processed
+  totalCount      Int      // Total number of employees to process
+  errorCount      Int      @default(0) // Number of errors encountered
+
+  // Job metadata
+  queuedAt        DateTime @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+  failedAt        DateTime?
+
+  // User who initiated the run
+  initiatedBy     String
+  initiatedByEmail String?
+
+  // Error tracking
+  errorMessage    String?  // Summary error message
+  errorDetails    Json?    // Detailed error log
+
+  // Results summary (populated on completion)
+  resultsSummary  Json?    // { totalGrossPay, totalNetPay, totalTaxes, etc. }
+
+  // Relations
+  company  Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@index([status])
+  @@index([queuedAt])
+  @@index([payDate])
+  @@map("payroll_runs")
+}
+
+// Independent Contractors (1099-NEC)
+model Contractor {
+  id             String   @id @default(cuid())
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id])
+  
+  firstName      String
+  lastName       String
+  email          String
+  tin            String   // Taxpayer ID (SSN or EIN), needs encryption
+  
+  address        String
+  city           String
+  state          String
+  zipCode        String
+  
+  hourlyRate     Decimal?
+  
+  payments       ContractorPayment[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([companyId])
+  @@map("contractors")
+}
+
+model ContractorPayment {
+  id             String     @id @default(cuid())
+  contractorId   String
+  contractor     Contractor @relation(fields: [contractorId], references: [id])
+  payrollRunId   String?    // Optional linkage to a payroll run
+  
+  amount         Decimal
+  paymentDate    DateTime
+  description    String?
+
+  createdAt      DateTime   @default(now())
+  @@map("contractor_payments")
 }

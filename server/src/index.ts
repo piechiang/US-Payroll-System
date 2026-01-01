@@ -20,6 +20,7 @@ import taxLiabilityRoutes from './routes/taxLiability.js';
 import w2Routes from './routes/w2.js';
 import payrollApprovalRoutes from './routes/payrollApproval.js';
 import achRoutes from './routes/ach.js';
+import glExportRoutes from './routes/glExport.js';
 
 // Middleware
 import { authenticate } from './middleware/auth.js';
@@ -28,7 +29,9 @@ import { csrfProtection, csrfTokenHandler, csrfErrorHandler } from './middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { sanitizeInput } from './middleware/sanitize.js';
 import { getCacheStats, clearAllCaches } from './services/cache.js';
-import { getMetrics, getMetricsContentType, recordHttpRequest } from './services/metrics.js';
+import { getMetrics, getMetricsContentType } from './services/metrics.js';
+import { requestLogger } from './middleware/requestLogger.js';
+import metricsRouter from './routes/metrics.js';
 
 // Load environment variables
 dotenv.config();
@@ -61,40 +64,8 @@ declare global {
   }
 }
 
-// Request ID middleware - adds unique ID for request tracing
-function requestIdMiddleware(req: Request, res: Response, next: NextFunction) {
-  const requestId = req.headers['x-request-id'] as string || crypto.randomUUID();
-  req.requestId = requestId;
-  res.setHeader('X-Request-ID', requestId);
-  next();
-}
-
-// Request logging middleware with metrics
-function requestLogger(req: Request, res: Response, next: NextFunction) {
-  const start = Date.now();
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-
-    // Log request
-    logger.info(`${req.method} ${req.path}`, {
-      requestId: req.requestId,
-      method: req.method,
-      path: req.path,
-      statusCode: res.statusCode,
-      duration: `${duration}ms`,
-      userAgent: req.headers['user-agent']
-    });
-
-    // Record metrics (skip health and metrics endpoints to avoid noise)
-    if (!req.path.includes('/health') && !req.path.includes('/metrics')) {
-      recordHttpRequest(req.method, req.path, res.statusCode, duration);
-    }
-  });
-  next();
-}
-
 // Middleware
-app.use(requestIdMiddleware); // Add request ID first
+app.use(requestLogger); // Add request ID and logging first
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -114,7 +85,6 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' })); // Limit request body size
 app.use(cookieParser());
 app.use(sanitizeInput); // Sanitize all input to prevent XSS/injection
-app.use(requestLogger); // Log all requests
 
 // Apply general rate limiting to all API routes
 // Skip in development if DISABLE_RATE_LIMIT=true
@@ -179,8 +149,8 @@ app.post('/api/admin/cache/clear', authenticate, (req, res) => {
   res.json({ message: 'All caches cleared', timestamp: new Date().toISOString() });
 });
 
-// Prometheus metrics endpoint
-app.get('/api/metrics', async (_req, res) => {
+// Prometheus metrics endpoint (must come before general metrics router)
+app.get('/api/prometheus-metrics', async (_req, res) => {
   try {
     const metrics = await getMetrics();
     res.set('Content-Type', getMetricsContentType());
@@ -189,6 +159,9 @@ app.get('/api/metrics', async (_req, res) => {
     res.status(500).json({ error: 'Failed to collect metrics' });
   }
 });
+
+// Payroll Metrics API (Dashboard charts and analytics)
+app.use('/api/metrics', metricsRouter);
 
 // API Documentation (public)
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
@@ -237,6 +210,7 @@ if (REQUIRE_AUTH) {
     registerRoutes('w2', [authenticate, csrfProtection], w2Routes);
     registerRoutes('payroll-approval', [authenticate, csrfProtection], payrollApprovalRoutes);
     registerRoutes('ach', [authenticate, csrfProtection], achRoutes);
+    registerRoutes('gl-export', [authenticate], glExportRoutes); // Read-only export, no CSRF needed
   } else {
     console.warn('⚠️  CSRF protection is DISABLED. Set DISABLE_CSRF=false for production.');
     registerRoutes('employees', [authenticate], employeeRoutes);
@@ -247,6 +221,7 @@ if (REQUIRE_AUTH) {
     registerRoutes('w2', [authenticate], w2Routes);
     registerRoutes('payroll-approval', [authenticate], payrollApprovalRoutes);
     registerRoutes('ach', [authenticate], achRoutes);
+    registerRoutes('gl-export', [authenticate], glExportRoutes);
   }
 } else {
   // Development mode - no auth required
@@ -259,6 +234,7 @@ if (REQUIRE_AUTH) {
   registerRoutes('w2', [], w2Routes);
   registerRoutes('payroll-approval', [], payrollApprovalRoutes);
   registerRoutes('ach', [], achRoutes);
+  registerRoutes('gl-export', [], glExportRoutes);
 }
 
 // CSRF error handling middleware

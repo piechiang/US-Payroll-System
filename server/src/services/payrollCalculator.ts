@@ -1,4 +1,5 @@
 import { Employee, Company } from '@prisma/client';
+import { Decimal } from 'decimal.js'; // 需要先安装: npm install decimal.js
 import { calculateFederalTax, FederalTaxResult } from '../tax/federal.js';
 import { calculateStateTax, StateTaxResult, UnsupportedStateError, isStateSupported } from '../tax/state/index.js';
 import { calculateEmployerTax, EmployerTaxResult } from '../tax/employerTax.js';
@@ -69,13 +70,27 @@ export interface PayrollResult {
 }
 
 export class PayrollCalculator {
-  private readonly OVERTIME_MULTIPLIER = 1.5;
+  private readonly OVERTIME_MULTIPLIER = new Decimal(1.5);
   private readonly PAY_PERIODS_PER_YEAR: Record<string, number> = {
     WEEKLY: 52,
     BIWEEKLY: 26,
     SEMIMONTHLY: 24,
     MONTHLY: 12
   };
+
+  /**
+   * Helper to convert number/string to Decimal safely
+   */
+  private toDecimal(val: number | string | Decimal | undefined | null): Decimal {
+    return new Decimal(val || 0);
+  }
+
+  /**
+   * Helper to round to 2 decimal places (cents)
+   */
+  private round(val: Decimal): number {
+    return val.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+  }
 
   calculate(input: PayrollInput): PayrollResult {
     const {
@@ -92,17 +107,22 @@ export class PayrollCalculator {
     const payFrequency = employee.company.payFrequency;
     const payPeriodsPerYear = this.PAY_PERIODS_PER_YEAR[payFrequency];
 
-    // Calculate earnings
+    // Calculate earnings (High Precision)
     const earnings = this.calculateEarnings(input, payPeriodsPerYear);
-    const retirement401k = this.calculateRetirement401k(employee, earnings.grossPay);
+
+    // Convert gross pay to Decimal for subsequent calculations
+    const grossPayDec = this.toDecimal(earnings.grossPay);
+    const cashTipsDec = this.toDecimal(earnings.cashTips);
+
+    const retirement401k = this.calculateRetirement401k(employee, grossPayDec);
     const employer401kMatch = this.calculateEmployer401kMatch(
       employee.company,
       retirement401k,
-      earnings.grossPay
+      grossPayDec
     );
 
     // Calculate annual income for tax brackets
-    const estimatedAnnualIncome = earnings.grossPay * payPeriodsPerYear;
+    const estimatedAnnualIncome = grossPayDec.times(payPeriodsPerYear).toNumber();
 
     // Calculate federal taxes (pass YTD wages for FICA wage cap)
     // Include W-4 Step 4(a) otherIncome and Step 4(b) deductions
@@ -163,37 +183,41 @@ export class PayrollCalculator {
       sutaRate
     });
 
-    // Calculate total employee taxes (excluding 401k which is a deduction, not a tax)
-    let totalEmployeeTaxes =
-      federalTax.incomeTax +
-      federalTax.socialSecurity +
-      federalTax.medicare +
-      stateTax.incomeTax +
-      stateTax.sdi +
-      stateTax.sui;
+    // Calculate total employee taxes (using Decimals for precision)
+    const fedTaxSum = this.toDecimal(federalTax.incomeTax)
+      .plus(federalTax.socialSecurity)
+      .plus(federalTax.medicare);
+
+    const stateTaxSum = this.toDecimal(stateTax.incomeTax)
+      .plus(stateTax.sdi)
+      .plus(stateTax.sui);
+
+    let totalEmployeeTaxesDec = fedTaxSum.plus(stateTaxSum);
 
     // Add local taxes if applicable
     if (localTax) {
-      totalEmployeeTaxes += localTax.total;
+      totalEmployeeTaxesDec = totalEmployeeTaxesDec.plus(localTax.total);
     }
 
     // Total deductions = taxes + 401k contributions
-    const totalDeductions = totalEmployeeTaxes + retirement401k;
+    const totalDeductionsDec = totalEmployeeTaxesDec.plus(retirement401k);
 
     // Net pay calculation:
     // - grossPay includes all taxable income (wages + credit card tips + cash tips)
     // - Cash tips are already in employee's possession, so we subtract them from net pay
     // - Credit card tips are paid by employer, so they remain in net pay
     // Net pay = grossPay - totalDeductions - cashTips (since cash already received)
-    const netPay = earnings.grossPay - totalDeductions - earnings.cashTips;
-    const reimbursements = input.reimbursements || 0;
+    const netPayDec = grossPayDec.minus(totalDeductionsDec).minus(cashTipsDec);
+    const reimbursementsDec = this.toDecimal(input.reimbursements);
 
     // Total employer cost:
     // - Employer pays wages + credit card tips (not cash tips)
     // - Plus employer taxes on all gross pay (including tips)
     // - Plus 401k match
-    const employerPaidEarnings = earnings.grossPay - earnings.cashTips;
-    const totalEmployerCost = employerPaidEarnings + employerTaxes.total + employer401kMatch;
+    const employerPaidEarningsDec = grossPayDec.minus(cashTipsDec);
+    const totalEmployerCostDec = employerPaidEarningsDec
+      .plus(employerTaxes.total)
+      .plus(employer401kMatch);
 
     return {
       employee: {
@@ -210,15 +234,15 @@ export class PayrollCalculator {
         state: stateTax,
         local: localTax
       },
-      retirement401k,
-      employer401kMatch,
+      retirement401k: this.round(this.toDecimal(retirement401k)),
+      employer401kMatch: this.round(this.toDecimal(employer401kMatch)),
       employerTaxes,
-      totalEmployeeTaxes,
-      totalDeductions,
-      netPay,
-      reimbursements,
-      totalPay: netPay + reimbursements,
-      totalEmployerCost
+      totalEmployeeTaxes: this.round(totalEmployeeTaxesDec),
+      totalDeductions: this.round(totalDeductionsDec),
+      netPay: this.round(netPayDec),
+      reimbursements: this.round(reimbursementsDec),
+      totalPay: this.round(netPayDec.plus(reimbursementsDec)),
+      totalEmployerCost: this.round(totalEmployerCostDec)
     };
   }
 
@@ -233,27 +257,27 @@ export class PayrollCalculator {
       cashTips = 0
     } = input;
 
+    let regularPayDec = new Decimal(0);
+    let overtimePayDec = new Decimal(0);
     let regularHours = 0;
-    let regularPay = 0;
-    let overtimePay = 0;
 
     if (employee.payType === 'HOURLY') {
       // Hourly employee
-      const hourlyRate = Number(employee.payRate);
+      const hourlyRate = this.toDecimal(Number(employee.payRate));
       regularHours = hoursWorked;
-      regularPay = regularHours * hourlyRate;
-      overtimePay = overtimeHours * hourlyRate * this.OVERTIME_MULTIPLIER;
+      regularPayDec = hourlyRate.times(hoursWorked);
+      overtimePayDec = hourlyRate.times(overtimeHours).times(this.OVERTIME_MULTIPLIER);
     } else {
       // Salaried employee
-      const annualSalary = Number(employee.payRate);
-      regularPay = annualSalary / payPeriodsPerYear;
+      const annualSalary = this.toDecimal(Number(employee.payRate));
+      regularPayDec = annualSalary.div(payPeriodsPerYear);
       regularHours = 40 * (52 / payPeriodsPerYear); // Standard hours for period
 
       // Salaried employees can still get overtime in some cases
       if (overtimeHours > 0) {
         // Calculate equivalent hourly rate for overtime
-        const equivalentHourlyRate = annualSalary / (52 * 40);
-        overtimePay = overtimeHours * equivalentHourlyRate * this.OVERTIME_MULTIPLIER;
+        const equivalentHourlyRate = annualSalary.div(2080);
+        overtimePayDec = equivalentHourlyRate.times(overtimeHours).times(this.OVERTIME_MULTIPLIER);
       }
     }
 
@@ -261,61 +285,84 @@ export class PayrollCalculator {
     // - Credit card tips: Paid by employer, included in gross pay for both taxes and net pay
     // - Cash tips: Already received by employee, included in gross pay for tax withholding only
     //   (not added to net pay since employee already has the cash)
-    const totalTips = creditCardTips + cashTips;
+    const bonusDec = this.toDecimal(bonus);
+    const commissionDec = this.toDecimal(commission);
+    const creditCardTipsDec = this.toDecimal(creditCardTips);
+    const cashTipsDec = this.toDecimal(cashTips);
+
+    const totalTipsDec = creditCardTipsDec.plus(cashTipsDec);
 
     // Gross pay includes all taxable income (wages + tips)
-    const grossPay = regularPay + overtimePay + bonus + commission + totalTips;
+    const grossPayDec = regularPayDec
+      .plus(overtimePayDec)
+      .plus(bonusDec)
+      .plus(commissionDec)
+      .plus(totalTipsDec);
 
     return {
       regularHours,
       overtimeHours,
-      regularPay: Math.round(regularPay * 100) / 100,
-      overtimePay: Math.round(overtimePay * 100) / 100,
-      bonus,
-      commission,
-      creditCardTips: Math.round(creditCardTips * 100) / 100,
-      cashTips: Math.round(cashTips * 100) / 100,
-      totalTips: Math.round(totalTips * 100) / 100,
-      grossPay: Math.round(grossPay * 100) / 100
+      regularPay: this.round(regularPayDec),
+      overtimePay: this.round(overtimePayDec),
+      bonus: this.round(bonusDec),
+      commission: this.round(commissionDec),
+      creditCardTips: this.round(creditCardTipsDec),
+      cashTips: this.round(cashTipsDec),
+      totalTips: this.round(totalTipsDec),
+      grossPay: this.round(grossPayDec)
     };
   }
 
-  private calculateRetirement401k(employee: Employee, grossPay: number): number {
+  private calculateRetirement401k(employee: Employee, grossPayDec: Decimal): number {
     const type = employee.retirement401kType;
 
     if (!type) {
       return 0;
     }
 
+    let contributionDec = new Decimal(0);
+
     if (type === 'PERCENT') {
-      const rate = Number(employee.retirement401kRate || 0);
-      const contribution = grossPay * (rate / 100);
-      return Math.round(Math.min(contribution, grossPay) * 100) / 100;
+      const rate = this.toDecimal(Number(employee.retirement401kRate || 0));
+      contributionDec = grossPayDec.times(rate.div(100));
     }
 
     if (type === 'FIXED') {
-      const amount = Number(employee.retirement401kAmount || 0);
-      return Math.round(Math.min(amount, grossPay) * 100) / 100;
+      contributionDec = this.toDecimal(Number(employee.retirement401kAmount || 0));
     }
 
-    return 0;
+    // Contribution cannot exceed gross pay
+    if (contributionDec.gt(grossPayDec)) {
+      contributionDec = grossPayDec;
+    }
+
+    return this.round(contributionDec);
   }
 
-  private calculateEmployer401kMatch(company: Company, employeeContribution: number, grossPay: number): number {
-    const matchRate = Number(company.retirement401kMatchRate || 0);
+  private calculateEmployer401kMatch(company: Company, employeeContribution: number, grossPayDec: Decimal): number {
+    const matchRate = this.toDecimal(Number(company.retirement401kMatchRate || 0));
+    const employeeContribDec = this.toDecimal(employeeContribution);
 
-    if (matchRate <= 0 || employeeContribution <= 0 || grossPay <= 0) {
+    if (matchRate.lte(0) || employeeContribDec.lte(0) || grossPayDec.lte(0)) {
       return 0;
     }
 
     const matchLimitPercent = company.retirement401kMatchLimitPercent;
-    const maxEligibleContribution = matchLimitPercent !== null && matchLimitPercent !== undefined
-      ? grossPay * (Number(matchLimitPercent) / 100)
-      : grossPay;
 
-    const eligibleContribution = Math.min(employeeContribution, maxEligibleContribution);
-    const match = eligibleContribution * (matchRate / 100);
+    // Determine the maximum contribution eligible for matching
+    let maxEligibleDec = grossPayDec;
+    if (matchLimitPercent !== null && matchLimitPercent !== undefined) {
+      maxEligibleDec = grossPayDec.times(this.toDecimal(Number(matchLimitPercent)).div(100));
+    }
 
-    return Math.round(Math.min(match, grossPay) * 100) / 100;
+    // Eligible contribution is the lesser of actual contribution or the limit
+    const eligibleDec = Decimal.min(employeeContribDec, maxEligibleDec);
+
+    const matchDec = eligibleDec.times(matchRate.div(100));
+
+    // Match cannot exceed gross pay (safeguard)
+    const finalMatch = Decimal.min(matchDec, grossPayDec);
+
+    return this.round(finalMatch);
   }
 }

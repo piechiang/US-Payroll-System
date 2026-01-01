@@ -5,8 +5,13 @@
  * Follows IRS Form W-2 specifications for tax year reporting.
  */
 
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { logger } from './logger.js';
+import PDFDocument from 'pdfkit';
+import { decrypt } from './encryption.js';
+
+// PDFKit types
+type PDFDoc = typeof PDFDocument extends new (...args: any[]) => infer R ? R : any;
 
 const prisma = new PrismaClient();
 
@@ -474,4 +479,264 @@ export async function getW2Summary(companyId: string, taxYear: number): Promise<
     generated,
     pending: employeesWithPayroll.length - generated
   };
+}
+
+/**
+ * Generate W-2 PDF (2-Up format: Copy B and Copy C on one page)
+ *
+ * Copy B: To Be Filed With Employee's FEDERAL Tax Return
+ * Copy C: For EMPLOYEE'S RECORDS
+ *
+ * Note: This generates substitute forms (black text). For Copy A (SSA filing),
+ * use official red-ink forms from the IRS.
+ */
+export function generateW2PDF(data: W2Data): PDFDoc {
+  const doc = new PDFDocument({
+    size: 'LETTER',
+    margin: 0,
+    bufferPages: true
+  });
+
+  // Decrypt SSN for display
+  const ssn = decrypt(data.employeeSSN);
+  const formattedSSN = ssn.replace(/(\d{3})(\d{2})(\d{4})/, '$1-$2-$3');
+
+  // Draw Copy B (top half)
+  drawW2Form(doc, data, formattedSSN, 0, 'Copy B', 'To Be Filed With Employee\'s FEDERAL Tax Return');
+
+  // Draw cut line
+  doc.moveTo(0, 396).lineTo(612, 396).dash(5, { space: 5 }).stroke().undash();
+
+  // Draw Copy C (bottom half)
+  drawW2Form(doc, data, formattedSSN, 396, 'Copy C', 'For EMPLOYEE\'S RECORDS');
+
+  doc.end();
+  return doc;
+}
+
+/**
+ * Draw a single W-2 form on the PDF
+ */
+function drawW2Form(
+  doc: PDFDoc,
+  data: W2Data,
+  ssn: string,
+  yOffset: number,
+  copyName: string,
+  copyDescription: string
+) {
+  const startX = 36;
+  const startY = 36 + yOffset;
+  const boxHeight = 22;
+  const fontSize = 9;
+  const labelSize = 7;
+
+  // Header: "Copy B" and description
+  doc.fontSize(10).font('Helvetica-Bold');
+  doc.text(copyName, startX, startY - 20);
+  doc.fontSize(7).font('Helvetica');
+  doc.text(copyDescription, startX + 50, startY - 19);
+
+  // Title
+  doc.fontSize(14).font('Helvetica-Bold');
+  doc.text(`${data.taxYear} Wage and Tax Statement`, startX + 150, startY - 20);
+  doc.fontSize(labelSize).font('Helvetica');
+  doc.text('Form W-2', startX + 450, startY - 20);
+
+  // Reset font
+  doc.fontSize(fontSize).font('Helvetica');
+
+  // Row 1: a-f (SSN, EIN, employer info, employee info)
+  drawBox(doc, startX, startY, 130, 35, 'a  Employee\'s social security number');
+  doc.fontSize(fontSize).font('Helvetica-Bold').text(ssn, startX + 10, startY + 18);
+  doc.font('Helvetica');
+
+  drawBox(doc, startX + 130, startY, 130, 35, 'b  Employer identification number (EIN)');
+  doc.fontSize(fontSize).text(data.companyEIN, startX + 140, startY + 18);
+
+  drawBox(doc, startX + 260, startY, 280, 35, 'c  Employer\'s name, address, and ZIP code');
+  doc.fontSize(fontSize).text(data.companyName, startX + 270, startY + 12);
+  doc.fontSize(7).text(
+    `${data.companyAddress.street}\n${data.companyAddress.city}, ${data.companyAddress.state} ${data.companyAddress.zipCode}`,
+    startX + 270,
+    startY + 20
+  );
+  doc.fontSize(fontSize);
+
+  // Row 2: d-f (control number, employee info)
+  const row2Y = startY + 35;
+  drawBox(doc, startX, row2Y, 130, 50, 'd  Control number');
+  doc.fontSize(7).text(data.controlNumber, startX + 10, row2Y + 18);
+  doc.fontSize(fontSize);
+
+  drawBox(doc, startX + 130, row2Y, 410, 50, 'e  Employee\'s first name and initial             Last name                                          Suff.');
+  doc.fontSize(fontSize).text(data.employeeName, startX + 140, row2Y + 18);
+
+  const row3Y = row2Y + 25;
+  doc.fontSize(7).text(`${data.employeeAddress.street}`, startX + 140, row3Y + 6);
+  doc.fontSize(labelSize).text('f  Employee\'s address and ZIP code', startX + 140, row3Y + 12);
+  doc.fontSize(7).text(
+    `${data.employeeAddress.city}, ${data.employeeAddress.state} ${data.employeeAddress.zipCode}`,
+    startX + 140,
+    row3Y + 18
+  );
+  doc.fontSize(fontSize);
+
+  // Row 3: Boxes 1-6 (wages and taxes)
+  const row4Y = row2Y + 50;
+  const col1Width = 90;
+  const col2Width = 90;
+  const col3Width = 90;
+  const col4Width = 90;
+  const col5Width = 90;
+  const col6Width = 90;
+
+  drawValueBox(doc, startX, row4Y, col1Width, boxHeight, '1  Wages, tips, other compensation', formatMoney(data.box1WagesTipsOther));
+  drawValueBox(doc, startX + col1Width, row4Y, col2Width, boxHeight, '2  Federal income tax withheld', formatMoney(data.box2FederalWithholding));
+  drawValueBox(doc, startX + col1Width + col2Width, row4Y, col3Width, boxHeight, '3  Social security wages', formatMoney(data.box3SocialSecurityWages));
+  drawValueBox(doc, startX + col1Width + col2Width + col3Width, row4Y, col4Width, boxHeight, '4  Social security tax withheld', formatMoney(data.box4SocialSecurityTax));
+  drawValueBox(doc, startX + col1Width + col2Width + col3Width + col4Width, row4Y, col5Width, boxHeight, '5  Medicare wages and tips', formatMoney(data.box5MedicareWages));
+  drawValueBox(doc, startX + col1Width + col2Width + col3Width + col4Width + col5Width, row4Y, col6Width, boxHeight, '6  Medicare tax withheld', formatMoney(data.box6MedicareTax));
+
+  // Row 4: Boxes 7-8
+  const row5Y = row4Y + boxHeight;
+  drawValueBox(doc, startX, row5Y, col1Width, boxHeight, '7  Social security tips', formatMoney(data.box7SocialSecurityTips));
+  drawValueBox(doc, startX + col1Width, row5Y, col2Width, boxHeight, '8  Allocated tips', formatMoney(data.box8AllocatedTips));
+  drawValueBox(doc, startX + col1Width + col2Width, row5Y, col3Width, boxHeight, '9  ', '');
+  drawValueBox(doc, startX + col1Width + col2Width + col3Width, row5Y, col4Width, boxHeight, '10  Dependent care benefits', formatMoney(data.box10DependentCareBenefits));
+  drawValueBox(doc, startX + col1Width + col2Width + col3Width + col4Width, row5Y, col5Width, boxHeight, '11  Nonqualified plans', formatMoney(data.box11NonqualifiedPlans));
+
+  // Box 12a-12d (codes and amounts)
+  const row6Y = row5Y + boxHeight;
+  drawBox(doc, startX + col1Width + col2Width + col3Width + col4Width + col5Width, row6Y, col6Width, boxHeight, '12a  See instructions for box 12');
+
+  const box12Code1 = data.box12[0] || null;
+  const box12Code2 = data.box12[1] || null;
+  const box12Code3 = data.box12[2] || null;
+  const box12Code4 = data.box12[3] || null;
+
+  if (box12Code1) {
+    doc.fontSize(6).text(box12Code1.code, startX + 450, row6Y + 8);
+    doc.fontSize(7).text(formatMoney(box12Code1.amount), startX + 465, row6Y + 8);
+  }
+
+  const row7Y = row6Y + boxHeight / 2;
+  if (box12Code2) {
+    doc.fontSize(6).text(box12Code2.code, startX + 450, row7Y + 8);
+    doc.fontSize(7).text(formatMoney(box12Code2.amount), startX + 465, row7Y + 8);
+  }
+
+  // Box 13 (checkboxes)
+  const row8Y = row6Y + boxHeight;
+  drawBox(doc, startX, row8Y, col1Width + col2Width + col3Width + col4Width + col5Width, boxHeight, '13  ');
+  doc.fontSize(7);
+  drawCheckbox(doc, startX + 10, row8Y + 8, data.box13.statutoryEmployee);
+  doc.text('Statutory employee', startX + 20, row8Y + 7);
+  drawCheckbox(doc, startX + 100, row8Y + 8, data.box13.retirementPlan);
+  doc.text('Retirement plan', startX + 110, row8Y + 7);
+  drawCheckbox(doc, startX + 180, row8Y + 8, data.box13.thirdPartySickPay);
+  doc.text('Third-party sick pay', startX + 190, row8Y + 7);
+
+  // Box 12c-12d
+  drawBox(doc, startX + col1Width + col2Width + col3Width + col4Width + col5Width, row8Y, col6Width, boxHeight / 2, '12b');
+  if (box12Code3) {
+    doc.fontSize(6).text(box12Code3.code, startX + 450, row8Y + 8);
+    doc.fontSize(7).text(formatMoney(box12Code3.amount), startX + 465, row8Y + 8);
+  }
+
+  const row9Y = row8Y + boxHeight / 2;
+  drawBox(doc, startX + col1Width + col2Width + col3Width + col4Width + col5Width, row9Y, col6Width, boxHeight / 2, '12c');
+  if (box12Code4) {
+    doc.fontSize(6).text(box12Code4.code, startX + 450, row9Y + 8);
+    doc.fontSize(7).text(formatMoney(box12Code4.amount), startX + 465, row9Y + 8);
+  }
+
+  // Box 14 (other)
+  const row10Y = row8Y + boxHeight;
+  drawBox(doc, startX, row10Y, col1Width + col2Width + col3Width + col4Width + col5Width, boxHeight, '14  Other');
+  if (data.box14Other.length > 0) {
+    const box14Text = data.box14Other.map(item => `${item.description} ${formatMoney(item.amount)}`).join(', ');
+    doc.fontSize(7).text(box14Text, startX + 10, row10Y + 8, { width: 430 });
+  }
+
+  drawBox(doc, startX + col1Width + col2Width + col3Width + col4Width + col5Width, row10Y, col6Width, boxHeight, '12d');
+
+  // State and local boxes (15-20)
+  const row11Y = row10Y + boxHeight;
+  drawValueBox(doc, startX, row11Y, 50, boxHeight, '15  State', data.stateCode || '');
+  drawValueBox(doc, startX + 50, row11Y, 80, boxHeight, 'Employer\'s state ID number', data.stateEmployerId || '');
+  drawValueBox(doc, startX + 130, row11Y, col2Width, boxHeight, '16  State wages, tips, etc.', formatMoney(data.stateWages));
+  drawValueBox(doc, startX + 130 + col2Width, row11Y, col3Width, boxHeight, '17  State income tax', formatMoney(data.stateWithholding));
+  drawValueBox(doc, startX + 130 + col2Width + col3Width, row11Y, col4Width, boxHeight, '18  Local wages, tips, etc.', formatMoney(data.localWages));
+  drawValueBox(doc, startX + 130 + col2Width + col3Width + col4Width, row11Y, col5Width, boxHeight, '19  Local income tax', formatMoney(data.localWithholding));
+  drawValueBox(doc, startX + 130 + col2Width + col3Width + col4Width + col5Width, row11Y, col6Width, boxHeight, '20  Locality name', data.localityName || '');
+
+  doc.fontSize(fontSize);
+}
+
+/**
+ * Draw a labeled box on the PDF
+ */
+function drawBox(
+  doc: PDFDoc,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  label: string
+) {
+  // Draw border
+  doc.rect(x, y, width, height).stroke();
+
+  // Draw label
+  doc.fontSize(6).font('Helvetica').text(label, x + 2, y + 2);
+}
+
+/**
+ * Draw a box with label and value
+ */
+function drawValueBox(
+  doc: PDFDoc,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  label: string,
+  value: string
+) {
+  // Draw border
+  doc.rect(x, y, width, height).stroke();
+
+  // Draw label
+  doc.fontSize(6).font('Helvetica').text(label, x + 2, y + 2);
+
+  // Draw value (right-aligned for money)
+  doc.fontSize(9).font('Helvetica-Bold');
+  const valueWidth = doc.widthOfString(value);
+  doc.text(value, x + width - valueWidth - 4, y + height - 14);
+  doc.font('Helvetica');
+}
+
+/**
+ * Draw a checkbox
+ */
+function drawCheckbox(
+  doc: PDFDoc,
+  x: number,
+  y: number,
+  checked: boolean
+) {
+  doc.rect(x, y, 8, 8).stroke();
+  if (checked) {
+    doc.fontSize(8).font('Helvetica-Bold').text('X', x + 1, y);
+    doc.font('Helvetica');
+  }
+}
+
+/**
+ * Format number as money string
+ */
+function formatMoney(amount: number): string {
+  if (amount === 0) return '';
+  return amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }

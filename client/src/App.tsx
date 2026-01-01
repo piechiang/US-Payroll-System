@@ -7,10 +7,12 @@ import Companies from './pages/Companies'
 import RunPayroll from './pages/RunPayroll'
 import PayrollHistory from './pages/PayrollHistory'
 import PaystubView from './pages/PaystubView'
+import Login from './pages/Login'
 
 function App() {
   return (
     <Routes>
+      <Route path="/login" element={<Login />} />
       <Route path="/" element={<Layout />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />

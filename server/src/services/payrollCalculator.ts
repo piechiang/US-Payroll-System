@@ -1,15 +1,20 @@
-import { Employee, Company } from '@prisma/client';
+import { Employee, Company, Garnishment } from '@prisma/client';
 import { Decimal } from 'decimal.js'; // 需要先安装: npm install decimal.js
 import { calculateFederalTax, FederalTaxResult } from '../tax/federal.js';
 import { calculateStateTax, StateTaxResult, UnsupportedStateError, isStateSupported } from '../tax/state/index.js';
 import { calculateEmployerTax, EmployerTaxResult } from '../tax/employerTax.js';
 import { calculateLocalTax, LocalTaxResult, hasLocalTax } from '../tax/local/index.js';
+import { ProrationCalculator } from './prorationCalculator.js';
+import { GarnishmentCalculator } from './garnishmentCalculator.js';
 
 // Re-export for use in routes
 export { UnsupportedStateError, isStateSupported, hasLocalTax };
 
 export interface PayrollInput {
-  employee: Employee & { company: Company };
+  employee: Employee & {
+    company: Company;
+    garnishments?: Garnishment[];  // Optional: active garnishments for this employee
+  };
   payPeriodStart: Date;
   payPeriodEnd: Date;
   hoursWorked?: number;      // For hourly employees
@@ -41,6 +46,8 @@ export interface PayrollEarnings {
   cashTips: number;          // Cash tips reported (for tax withholding only)
   totalTips: number;         // Total tips (credit card + cash)
   grossPay: number;          // Total taxable earnings (includes all tips)
+  prorationFactor?: number;  // Proration factor if mid-period hire/termination (0.0 - 1.0)
+  proratedAmount?: number;   // Amount prorated (only if factor < 1.0)
 }
 
 export interface PayrollResult {
@@ -61,8 +68,14 @@ export interface PayrollResult {
   retirement401k: number;            // Employee 401(k) contribution
   employer401kMatch: number;         // Employer 401(k) match
   employerTaxes: EmployerTaxResult;  // Employer-paid taxes (FUTA, SUTA, FICA match)
+  garnishments: number;              // Total garnishment deductions
+  garnishmentDetails?: Array<{       // Detailed breakdown of garnishments
+    garnishmentId: string;
+    description: string;
+    amount: number;
+  }>;
   totalEmployeeTaxes: number;        // Sum of all employee taxes (federal + state + local)
-  totalDeductions: number;           // Total employee deductions (taxes + 401k + other)
+  totalDeductions: number;           // Total employee deductions (taxes + 401k + garnishments)
   netPay: number;
   reimbursements: number;
   totalPay: number;                  // netPay + reimbursements
@@ -199,8 +212,36 @@ export class PayrollCalculator {
       totalEmployeeTaxesDec = totalEmployeeTaxesDec.plus(localTax.total);
     }
 
-    // Total deductions = taxes + 401k contributions
-    const totalDeductionsDec = totalEmployeeTaxesDec.plus(retirement401k);
+    // Calculate garnishment deductions (after taxes, using disposable earnings)
+    // Disposable earnings = Gross pay - All legally required deductions (taxes)
+    const disposableEarningsDec = grossPayDec.minus(totalEmployeeTaxesDec);
+
+    let garnishmentDeductionDec = new Decimal(0);
+    let garnishmentDetails: Array<{ garnishmentId: string; description: string; amount: number }> | undefined;
+
+    if (employee.garnishments && employee.garnishments.length > 0) {
+      const garnishmentResult = GarnishmentCalculator.calculateDeductions(
+        disposableEarningsDec,
+        employee.garnishments
+      );
+
+      garnishmentDeductionDec = garnishmentResult.totalDeduction;
+
+      // Map garnishment details with descriptions
+      garnishmentDetails = garnishmentResult.details.map(detail => {
+        const garnishment = employee.garnishments!.find(g => g.id === detail.garnishmentId);
+        return {
+          garnishmentId: detail.garnishmentId,
+          description: garnishment?.description || 'Garnishment',
+          amount: detail.amount
+        };
+      });
+    }
+
+    // Total deductions = taxes + 401k contributions + garnishments
+    const totalDeductionsDec = totalEmployeeTaxesDec
+      .plus(retirement401k)
+      .plus(garnishmentDeductionDec);
 
     // Net pay calculation:
     // - grossPay includes all taxable income (wages + credit card tips + cash tips)
@@ -237,6 +278,8 @@ export class PayrollCalculator {
       retirement401k: this.round(this.toDecimal(retirement401k)),
       employer401kMatch: this.round(this.toDecimal(employer401kMatch)),
       employerTaxes,
+      garnishments: this.round(garnishmentDeductionDec),
+      garnishmentDetails,
       totalEmployeeTaxes: this.round(totalEmployeeTaxesDec),
       totalDeductions: this.round(totalDeductionsDec),
       netPay: this.round(netPayDec),
@@ -249,6 +292,8 @@ export class PayrollCalculator {
   private calculateEarnings(input: PayrollInput, payPeriodsPerYear: number): PayrollEarnings {
     const {
       employee,
+      payPeriodStart,
+      payPeriodEnd,
       hoursWorked = 0,
       overtimeHours = 0,
       bonus = 0,
@@ -260,18 +305,37 @@ export class PayrollCalculator {
     let regularPayDec = new Decimal(0);
     let overtimePayDec = new Decimal(0);
     let regularHours = 0;
+    let prorationFactor: Decimal | undefined;
+    let proratedAmount: number | undefined;
 
     if (employee.payType === 'HOURLY') {
-      // Hourly employee
+      // Hourly employee - no proration needed (paid for actual hours worked)
       const hourlyRate = this.toDecimal(Number(employee.payRate));
       regularHours = hoursWorked;
       regularPayDec = hourlyRate.times(hoursWorked);
       overtimePayDec = hourlyRate.times(overtimeHours).times(this.OVERTIME_MULTIPLIER);
     } else {
-      // Salaried employee
+      // Salaried employee - apply proration for mid-period hire/termination
       const annualSalary = this.toDecimal(Number(employee.payRate));
-      regularPayDec = annualSalary.div(payPeriodsPerYear);
+      let baseSalaryForPeriod = annualSalary.div(payPeriodsPerYear);
       regularHours = 40 * (52 / payPeriodsPerYear); // Standard hours for period
+
+      // Calculate proration factor for hire/termination dates
+      prorationFactor = ProrationCalculator.calculateProrationFactor(
+        payPeriodStart,
+        payPeriodEnd,
+        employee.hireDate,
+        employee.terminationDate
+      );
+
+      // Apply proration if employee didn't work the full period
+      if (prorationFactor.lt(1)) {
+        const fullPeriodSalary = baseSalaryForPeriod;
+        regularPayDec = ProrationCalculator.prorateAmount(baseSalaryForPeriod, prorationFactor);
+        proratedAmount = this.round(fullPeriodSalary.minus(regularPayDec));
+      } else {
+        regularPayDec = baseSalaryForPeriod;
+      }
 
       // Salaried employees can still get overtime in some cases
       if (overtimeHours > 0) {
@@ -309,7 +373,9 @@ export class PayrollCalculator {
       creditCardTips: this.round(creditCardTipsDec),
       cashTips: this.round(cashTipsDec),
       totalTips: this.round(totalTipsDec),
-      grossPay: this.round(grossPayDec)
+      grossPay: this.round(grossPayDec),
+      prorationFactor: prorationFactor ? this.round(prorationFactor) : undefined,
+      proratedAmount
     };
   }
 

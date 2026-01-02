@@ -9,15 +9,16 @@
  */
 
 export interface FederalTaxInput {
-  grossPay: number;
+  grossPay: number;              // Total gross wages (used for FICA calculation)
+  preTaxDeductions?: number;     // Pre-tax deductions (401k, Health Insurance, HSA, FSA, etc.)
   annualIncome: number;
   filingStatus: string;
-  allowances: number;           // W-4 Step 3 dependents
+  allowances: number;            // W-4 Step 3 dependents
   additionalWithholding: number; // W-4 Step 4(c)
   otherIncome?: number;          // W-4 Step 4(a) - other income not from jobs
   deductions?: number;           // W-4 Step 4(b) - itemized deductions beyond standard
   payPeriodsPerYear: number;
-  ytdGrossWages?: number;       // For Social Security wage cap
+  ytdGrossWages?: number;        // For Social Security wage cap
 }
 
 export interface FederalTaxResult {
@@ -98,6 +99,7 @@ const DEPENDENT_CREDIT_PER_ALLOWANCE = 2000;
 export function calculateFederalTax(input: FederalTaxInput): FederalTaxResult {
   const {
     grossPay,
+    preTaxDeductions = 0,  // CRITICAL: Subtract 401k, Health, HSA before calculating income tax
     filingStatus,
     allowances,
     additionalWithholding,
@@ -124,9 +126,14 @@ export function calculateFederalTax(input: FederalTaxInput): FederalTaxResult {
   // Calculate dependent credit per pay period
   const dependentCredit = (allowances * DEPENDENT_CREDIT_PER_ALLOWANCE) / payPeriodsPerYear;
 
+  // CRITICAL FIX: Calculate federal income tax base
+  // Federal Income Tax = Gross Pay - Pre-tax Deductions (401k, Health, HSA, FSA)
+  // Note: FICA (Social Security + Medicare) is calculated on FULL gross pay (no 401k deduction)
+  const federalIncomeTaxBase = grossPay - preTaxDeductions;
+
   // Calculate taxable wages (Adjusted Annual Wage Method)
-  // = Gross Pay + Other Income (Step 4a) - Standard Deduction - Additional Deductions (Step 4b)
-  let taxableWages = grossPay + otherIncomePerPeriod - standardDeductionPerPeriod - additionalDeductionsPerPeriod;
+  // = Federal Income Tax Base + Other Income (Step 4a) - Standard Deduction - Additional Deductions (Step 4b)
+  let taxableWages = federalIncomeTaxBase + otherIncomePerPeriod - standardDeductionPerPeriod - additionalDeductionsPerPeriod;
   taxableWages = Math.max(0, taxableWages);
 
   // Calculate annualized taxable wages for bracket lookup

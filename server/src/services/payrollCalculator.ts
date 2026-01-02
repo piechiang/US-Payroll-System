@@ -137,10 +137,16 @@ export class PayrollCalculator {
     // Calculate annual income for tax brackets
     const estimatedAnnualIncome = grossPayDec.times(payPeriodsPerYear).toNumber();
 
+    // CRITICAL FIX: Calculate pre-tax deductions for federal income tax
+    // 401(k) contributions are pre-tax for INCOME TAX but NOT for FICA
+    // Future: Add Health Insurance, HSA, FSA, etc. here
+    const preTaxDeductions = retirement401k;
+
     // Calculate federal taxes (pass YTD wages for FICA wage cap)
     // Include W-4 Step 4(a) otherIncome and Step 4(b) deductions
     const federalTax = calculateFederalTax({
       grossPay: earnings.grossPay,
+      preTaxDeductions,  // CRITICAL: Deduct 401k from income tax base (but not FICA)
       annualIncome: estimatedAnnualIncome,
       filingStatus: employee.filingStatus,
       allowances: employee.allowances,

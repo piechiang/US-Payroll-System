@@ -1,12 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { GLExportService } from '../services/glExportService.js';
 import { AppError } from '../utils/AppError.js';
-import { AuditLogger, AuditAction, AuditEntity } from '../services/auditLogger.js';
+import { logAudit } from '../services/auditLog.js';
+import { AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 
 // GET /api/gl-export/quickbooks-csv
-router.get('/quickbooks-csv', async (req: Request, res: Response) => {
+router.get('/quickbooks-csv', async (req: AuthRequest, res: Response) => {
   try {
     const { companyId, payPeriodStart, payPeriodEnd } = req.query;
 
@@ -29,17 +30,17 @@ router.get('/quickbooks-csv', async (req: Request, res: Response) => {
     );
 
     // Audit log the export
-    const userId = (req as any).user?.id || 'system';
-    await AuditLogger.log({
-      userId,
+    await logAudit(req, {
+      action: 'EXPORT',
+      resource: 'PAYROLL',
+      resourceId: `${companyId}-${payPeriodStart}-${payPeriodEnd}`,
       companyId: String(companyId),
-      action: AuditAction.EXPORT,
-      entity: AuditEntity.PAYROLL,
-      entityId: `${companyId}-${payPeriodStart}-${payPeriodEnd}`,
+      description: `GL export (QuickBooks CSV)`,
       metadata: {
         exportType: 'QuickBooks CSV',
-        payPeriodStart: payPeriodStart,
-        payPeriodEnd: payPeriodEnd
+        payPeriodStart: String(payPeriodStart),
+        payPeriodEnd: String(payPeriodEnd),
+        format: 'CSV'
       }
     });
 
@@ -57,7 +58,7 @@ router.get('/quickbooks-csv', async (req: Request, res: Response) => {
 });
 
 // GET /api/gl-export/quickbooks-iif
-router.get('/quickbooks-iif', async (req: Request, res: Response) => {
+router.get('/quickbooks-iif', async (req: AuthRequest, res: Response) => {
   try {
     const { companyId, payPeriodStart, payPeriodEnd } = req.query;
 
@@ -80,17 +81,17 @@ router.get('/quickbooks-iif', async (req: Request, res: Response) => {
     );
 
     // Audit log the export
-    const userId = (req as any).user?.id || 'system';
-    await AuditLogger.log({
-      userId,
+    await logAudit(req, {
+      action: 'EXPORT',
+      resource: 'PAYROLL',
+      resourceId: `${companyId}-${payPeriodStart}-${payPeriodEnd}`,
       companyId: String(companyId),
-      action: AuditAction.EXPORT,
-      entity: AuditEntity.PAYROLL,
-      entityId: `${companyId}-${payPeriodStart}-${payPeriodEnd}`,
+      description: `GL export (QuickBooks IIF)`,
       metadata: {
         exportType: 'QuickBooks IIF',
-        payPeriodStart: payPeriodStart,
-        payPeriodEnd: payPeriodEnd
+        payPeriodStart: String(payPeriodStart),
+        payPeriodEnd: String(payPeriodEnd),
+        format: 'IIF'
       }
     });
 

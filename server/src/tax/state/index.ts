@@ -65,6 +65,11 @@ export interface StateTaxResult {
   details?: {
     taxableWages?: number;
     marginalRate?: number;
+    sdiRate?: number;         // SDI rate (for CA, RI, etc.)
+    sdiWageCap?: number;      // SDI wage cap (for CA, RI, etc.)
+    standardDeduction?: number;
+    exemptionCredit?: number;
+    configYear?: number;      // Tax year used for config
   };
 }
 
@@ -81,7 +86,7 @@ const NO_INCOME_TAX_STATES = [
   'TN'  // Tennessee (no wage income tax)
 ];
 
-export function calculateStateTax(input: StateTaxInput): StateTaxResult {
+export async function calculateStateTax(input: StateTaxInput, taxYear?: number): Promise<StateTaxResult> {
   const { state } = input;
 
   // Check if state has no income tax
@@ -101,7 +106,7 @@ export function calculateStateTax(input: StateTaxInput): StateTaxResult {
   // Route to specific state calculator
   switch (state) {
     // Original 11 states
-    case 'CA': return calculateCaliforniaTax(input);
+    case 'CA': return await calculateCaliforniaTax(input, taxYear);
     case 'NY': return calculateNewYorkTax(input);
     case 'NJ': return calculateNewJerseyTax(input);
     case 'PA': return calculatePennsylvaniaTax(input);

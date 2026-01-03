@@ -69,7 +69,7 @@ describe('PayrollCalculator - Integration Tests', () => {
   });
 
   describe('Proration Integration', () => {
-    it('should prorate salary for mid-period hire', () => {
+    it('should prorate salary for mid-period hire', async () => {
       const payPeriodStart = new Date('2024-01-01'); // Monday
       const payPeriodEnd = new Date('2024-01-14');   // Sunday (2 weeks)
 
@@ -79,7 +79,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         hireDate: new Date('2024-01-08')
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...employeeWithLateHire, company: mockCompany },
         payPeriodStart,
         payPeriodEnd
@@ -99,7 +99,7 @@ describe('PayrollCalculator - Integration Tests', () => {
       expect(result.earnings.proratedAmount).toBeGreaterThan(0);
     });
 
-    it('should prorate salary for mid-period termination', () => {
+    it('should prorate salary for mid-period termination', async () => {
       const payPeriodStart = new Date('2024-01-01');
       const payPeriodEnd = new Date('2024-01-14');
 
@@ -109,7 +109,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         terminationDate: new Date('2024-01-07')
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...employeeWithTermination, company: mockCompany },
         payPeriodStart,
         payPeriodEnd
@@ -121,12 +121,12 @@ describe('PayrollCalculator - Integration Tests', () => {
       expect(result.earnings.regularPay).toBeLessThan(104000 / 26);
     });
 
-    it('should NOT prorate for full pay period', () => {
+    it('should NOT prorate for full pay period', async () => {
       const payPeriodStart = new Date('2024-06-01');
       const payPeriodEnd = new Date('2024-06-14');
 
       // Employee hired long before this period
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...mockEmployee, company: mockCompany },
         payPeriodStart,
         payPeriodEnd
@@ -140,7 +140,7 @@ describe('PayrollCalculator - Integration Tests', () => {
       expect(result.earnings.regularPay).toBe(4000); // $104,000 / 26
     });
 
-    it('should NOT prorate hourly employees', () => {
+    it('should NOT prorate hourly employees', async () => {
       const hourlyEmployee = {
         ...mockEmployee,
         payType: 'HOURLY' as const,
@@ -148,7 +148,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         hireDate: new Date('2024-01-08') // Mid-period hire
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...hourlyEmployee, company: mockCompany },
         payPeriodStart: new Date('2024-01-01'),
         payPeriodEnd: new Date('2024-01-14'),
@@ -162,7 +162,7 @@ describe('PayrollCalculator - Integration Tests', () => {
   });
 
   describe('Garnishment Integration', () => {
-    it('should calculate garnishment deductions correctly', () => {
+    it('should calculate garnishment deductions correctly', async () => {
       const garnishments: Garnishment[] = [
         {
           id: 'garn-1',
@@ -185,7 +185,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         garnishments
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...employeeWithGarnishments, company: mockCompany },
         payPeriodStart: new Date('2024-01-01'),
         payPeriodEnd: new Date('2024-01-14')
@@ -201,7 +201,7 @@ describe('PayrollCalculator - Integration Tests', () => {
       expect(result.netPay).toBeLessThan(result.earnings.grossPay - result.totalEmployeeTaxes - result.retirement401k);
     });
 
-    it('should enforce federal 25% garnishment limit', () => {
+    it('should enforce federal 25% garnishment limit', async () => {
       const garnishments: Garnishment[] = [
         {
           id: 'garn-1',
@@ -224,7 +224,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         garnishments
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...employeeWithGarnishments, company: mockCompany },
         payPeriodStart: new Date('2024-01-01'),
         payPeriodEnd: new Date('2024-01-14')
@@ -238,7 +238,7 @@ describe('PayrollCalculator - Integration Tests', () => {
       expect(result.garnishmentDetails![0].amount).toBeLessThan(2000);
     });
 
-    it('should handle multiple garnishments with priority', () => {
+    it('should handle multiple garnishments with priority', async () => {
       const garnishments: Garnishment[] = [
         {
           id: 'garn-1',
@@ -275,7 +275,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         garnishments
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...employeeWithGarnishments, company: mockCompany },
         payPeriodStart: new Date('2024-01-01'),
         payPeriodEnd: new Date('2024-01-14')
@@ -289,7 +289,7 @@ describe('PayrollCalculator - Integration Tests', () => {
       expect(result.garnishmentDetails![1].description).toBe('Tax Levy');
     });
 
-    it('should skip inactive garnishments', () => {
+    it('should skip inactive garnishments', async () => {
       const garnishments: Garnishment[] = [
         {
           id: 'garn-1',
@@ -312,7 +312,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         garnishments
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...employeeWithGarnishments, company: mockCompany },
         payPeriodStart: new Date('2024-01-01'),
         payPeriodEnd: new Date('2024-01-14')
@@ -325,7 +325,7 @@ describe('PayrollCalculator - Integration Tests', () => {
   });
 
   describe('Combined Proration and Garnishment', () => {
-    it('should apply both proration and garnishments correctly', () => {
+    it('should apply both proration and garnishments correctly', async () => {
       const garnishments: Garnishment[] = [
         {
           id: 'garn-1',
@@ -349,7 +349,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         garnishments
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...employeeWithBoth, company: mockCompany },
         payPeriodStart: new Date('2024-01-01'),
         payPeriodEnd: new Date('2024-01-14')
@@ -370,8 +370,8 @@ describe('PayrollCalculator - Integration Tests', () => {
   });
 
   describe('Edge Cases', () => {
-    it('should handle employee with no garnishments', () => {
-      const result = calculator.calculate({
+    it('should handle employee with no garnishments', async () => {
+      const result = await calculator.calculate({
         employee: { ...mockEmployee, company: mockCompany },
         payPeriodStart: new Date('2024-01-01'),
         payPeriodEnd: new Date('2024-01-14')
@@ -381,7 +381,7 @@ describe('PayrollCalculator - Integration Tests', () => {
       expect(result.garnishmentDetails).toBeUndefined();
     });
 
-    it('should handle employee hired exactly on pay period start', () => {
+    it('should handle employee hired exactly on pay period start', async () => {
       const payPeriodStart = new Date('2024-01-01');
 
       const employeeHiredOnStart = {
@@ -389,7 +389,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         hireDate: payPeriodStart
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...employeeHiredOnStart, company: mockCompany },
         payPeriodStart,
         payPeriodEnd: new Date('2024-01-14')
@@ -400,7 +400,7 @@ describe('PayrollCalculator - Integration Tests', () => {
       expect(result.earnings.regularPay).toBe(4000);
     });
 
-    it('should handle percentage-based garnishment', () => {
+    it('should handle percentage-based garnishment', async () => {
       const garnishments: Garnishment[] = [
         {
           id: 'garn-1',
@@ -423,7 +423,7 @@ describe('PayrollCalculator - Integration Tests', () => {
         garnishments
       };
 
-      const result = calculator.calculate({
+      const result = await calculator.calculate({
         employee: { ...employeeWithPercentGarnishment, company: mockCompany },
         payPeriodStart: new Date('2024-01-01'),
         payPeriodEnd: new Date('2024-01-14')

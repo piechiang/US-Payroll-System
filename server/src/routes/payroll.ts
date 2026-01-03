@@ -83,7 +83,7 @@ router.post('/calculate', async (req: AuthRequest, res: Response) => {
     }
 
     const calculator = new PayrollCalculator();
-    const result = calculator.calculate({
+    const result = await calculator.calculate({
       employee,
       payPeriodStart: data.payPeriodStart,
       payPeriodEnd: data.payPeriodEnd,
@@ -252,7 +252,7 @@ router.post('/run', payrollRunLimiter, authorizeRoles('ADMIN', 'ACCOUNTANT', 'MA
         // Get previous YTD gross for wage cap calculations
         const prevGross = Number(ytdTotals._sum.grossPay || 0);
 
-        const calcResult = calculator.calculate({
+        const calcResult = await calculator.calculate({
           employee,
           payPeriodStart: data.payPeriodStart,
           payPeriodEnd: data.payPeriodEnd,

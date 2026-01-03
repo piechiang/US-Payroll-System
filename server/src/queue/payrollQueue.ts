@@ -171,7 +171,7 @@ export function createPayrollWorker() {
                 const prevGross = Number(ytdTotals._sum.grossPay || 0);
 
                 // Calculate payroll
-                const calcResult = calculator.calculate({
+                const calcResult = await calculator.calculate({
                   employee,
                   payPeriodStart: new Date(payPeriodStart),
                   payPeriodEnd: new Date(payPeriodEnd),

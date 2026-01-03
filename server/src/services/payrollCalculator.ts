@@ -105,7 +105,7 @@ export class PayrollCalculator {
     return val.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
   }
 
-  calculate(input: PayrollInput): PayrollResult {
+  async calculate(input: PayrollInput): Promise<PayrollResult> {
     const {
       employee,
       payPeriodStart,
@@ -158,14 +158,18 @@ export class PayrollCalculator {
     });
 
     // Calculate state taxes (pass YTD wages for SDI wage cap)
-    const stateTax = calculateStateTax({
+    // Determine tax year from pay period end date
+    const payDate = new Date(payPeriodEnd);
+    const taxYear = payDate.getFullYear();
+
+    const stateTax = await calculateStateTax({
       state: employee.state,
       grossPay: earnings.grossPay,
       annualIncome: estimatedAnnualIncome,
       filingStatus: employee.filingStatus,
       payPeriodsPerYear,
       ytdGrossWages // For SDI wage cap (e.g., California)
-    });
+    }, taxYear);
 
     // Calculate local/city taxes (Maryland requires county-based local tax)
     let localTax: LocalTaxResult | null = null;

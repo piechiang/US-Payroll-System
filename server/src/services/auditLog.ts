@@ -21,7 +21,9 @@ export type AuditAction =
   | 'LOGOUT'
   | 'PASSWORD_CHANGE'
   | 'PASSWORD_CHANGE_FAILED'
-  | 'PAYROLL_RUN';
+  | 'PAYROLL_RUN'
+  | 'APPROVE'
+  | 'REJECT';
 
 // Resource types
 export type AuditResource =
@@ -31,7 +33,11 @@ export type AuditResource =
   | 'PAYROLL'
   | 'COMPANY'
   | 'USER'
-  | 'AUTH';
+  | 'AUTH'
+  | 'TAX_INFO'
+  | 'W2_FORM'
+  | 'GARNISHMENT'
+  | 'CONTRACTOR';
 
 export interface AuditLogEntry {
   action: AuditAction;

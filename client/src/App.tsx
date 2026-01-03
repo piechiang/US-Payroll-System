@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
@@ -8,8 +9,29 @@ import RunPayroll from './pages/RunPayroll'
 import PayrollHistory from './pages/PayrollHistory'
 import PaystubView from './pages/PaystubView'
 import Login from './pages/Login'
+import { fetchCsrfToken } from './services/api'
 
 function App() {
+  // Fetch CSRF token on app initialization
+  useEffect(() => {
+    const initCsrf = async () => {
+      try {
+        await fetchCsrfToken()
+        console.log('CSRF token initialized')
+      } catch (error) {
+        console.warn('Failed to initialize CSRF token:', error)
+        // Don't block app loading if CSRF fetch fails
+        // The request interceptor will retry on first state-changing request
+      }
+    }
+
+    // Only fetch if user is logged in
+    const token = localStorage.getItem('token')
+    if (token) {
+      initCsrf()
+    }
+  }, [])
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../services/api'
+import { api, fetchCsrfToken } from '../services/api'
 
 export default function Login() {
   const nav = useNavigate()
@@ -23,6 +23,15 @@ export default function Login() {
       }
 
       localStorage.setItem('token', token)
+
+      // Fetch CSRF token after successful login
+      try {
+        await fetchCsrfToken()
+      } catch (csrfError) {
+        console.warn('Failed to fetch CSRF token after login:', csrfError)
+        // Don't block navigation if CSRF fetch fails
+      }
+
       nav('/dashboard', { replace: true })
     } catch (error: any) {
       const msg =

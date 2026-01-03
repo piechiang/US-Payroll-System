@@ -150,6 +150,8 @@ app.post('/api/admin/cache/clear', authenticate, (req, res) => {
 });
 
 // Prometheus metrics endpoint (must come before general metrics router)
+// NOTE: Prometheus metrics are for internal monitoring and should be protected
+// in production (e.g., only accessible from internal network or with API key)
 app.get('/api/prometheus-metrics', async (_req, res) => {
   try {
     const metrics = await getMetrics();
@@ -159,9 +161,6 @@ app.get('/api/prometheus-metrics', async (_req, res) => {
     res.status(500).json({ error: 'Failed to collect metrics' });
   }
 });
-
-// Payroll Metrics API (Dashboard charts and analytics)
-app.use('/api/metrics', metricsRouter);
 
 // API Documentation (public)
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
@@ -211,6 +210,7 @@ if (REQUIRE_AUTH) {
     registerRoutes('payroll-approval', [authenticate, csrfProtection], payrollApprovalRoutes);
     registerRoutes('ach', [authenticate, csrfProtection], achRoutes);
     registerRoutes('gl-export', [authenticate], glExportRoutes); // Read-only export, no CSRF needed
+    registerRoutes('metrics', [authenticate], metricsRouter); // Analytics, read-only, no CSRF needed
   } else {
     console.warn('⚠️  CSRF protection is DISABLED. Set DISABLE_CSRF=false for production.');
     registerRoutes('employees', [authenticate], employeeRoutes);
@@ -222,6 +222,7 @@ if (REQUIRE_AUTH) {
     registerRoutes('payroll-approval', [authenticate], payrollApprovalRoutes);
     registerRoutes('ach', [authenticate], achRoutes);
     registerRoutes('gl-export', [authenticate], glExportRoutes);
+    registerRoutes('metrics', [authenticate], metricsRouter);
   }
 } else {
   // Development mode - no auth required
@@ -235,6 +236,7 @@ if (REQUIRE_AUTH) {
   registerRoutes('payroll-approval', [], payrollApprovalRoutes);
   registerRoutes('ach', [], achRoutes);
   registerRoutes('gl-export', [], glExportRoutes);
+  registerRoutes('metrics', [], metricsRouter);
 }
 
 // CSRF error handling middleware

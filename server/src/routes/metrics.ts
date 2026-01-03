@@ -1,22 +1,28 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { subMonths, format, startOfMonth, endOfMonth } from 'date-fns';
 import { Decimal } from 'decimal.js';
 import { AppError } from '../utils/AppError.js';
-
-// Assuming you have an auth middleware available
-// import { hasCompanyAccess, AuthRequest } from '../middleware/auth.js';
+import { hasCompanyAccess, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 const prisma = new PrismaClient();
 
-// GET /api/metrics/cost-trend
-// Note: Ensure you add authentication middleware here
-router.get('/cost-trend', async (req: Request, res: Response) => {
+/**
+ * GET /api/metrics/cost-trend
+ * Returns payroll cost trends for the last 6 months
+ * Requires authentication and company access
+ */
+router.get('/cost-trend', async (req: AuthRequest, res: Response) => {
   const { companyId } = req.query;
-  
-  if (!companyId) {
-      return res.status(400).json({ error: 'Company ID required' });
+
+  if (!companyId || typeof companyId !== 'string') {
+    return res.status(400).json({ error: 'Company ID required' });
+  }
+
+  // Multi-tenant security: verify user has access to this company
+  if (!hasCompanyAccess(req, companyId)) {
+    return res.status(403).json({ error: 'Access denied to this company' });
   }
 
   // Get data for the last 6 months
@@ -54,12 +60,21 @@ router.get('/cost-trend', async (req: Request, res: Response) => {
   res.json(data);
 });
 
-// GET /api/metrics/headcount
-router.get('/headcount', async (req: Request, res: Response) => {
+/**
+ * GET /api/metrics/headcount
+ * Returns employee headcount statistics
+ * Requires authentication and company access
+ */
+router.get('/headcount', async (req: AuthRequest, res: Response) => {
   const { companyId } = req.query;
 
-  if (!companyId) {
+  if (!companyId || typeof companyId !== 'string') {
     return res.status(400).json({ error: 'Company ID required' });
+  }
+
+  // Multi-tenant security: verify user has access to this company
+  if (!hasCompanyAccess(req, companyId)) {
+    return res.status(403).json({ error: 'Access denied to this company' });
   }
 
   const activeEmployees = await prisma.employee.count({
@@ -82,12 +97,21 @@ router.get('/headcount', async (req: Request, res: Response) => {
   });
 });
 
-// GET /api/metrics/department-breakdown
-router.get('/department-breakdown', async (req: Request, res: Response) => {
+/**
+ * GET /api/metrics/department-breakdown
+ * Returns employee distribution by department
+ * Requires authentication and company access
+ */
+router.get('/department-breakdown', async (req: AuthRequest, res: Response) => {
   const { companyId } = req.query;
 
-  if (!companyId) {
+  if (!companyId || typeof companyId !== 'string') {
     return res.status(400).json({ error: 'Company ID required' });
+  }
+
+  // Multi-tenant security: verify user has access to this company
+  if (!hasCompanyAccess(req, companyId)) {
+    return res.status(403).json({ error: 'Access denied to this company' });
   }
 
   const departmentData = await prisma.employee.groupBy({
@@ -109,12 +133,21 @@ router.get('/department-breakdown', async (req: Request, res: Response) => {
   res.json(data);
 });
 
-// GET /api/metrics/payroll-summary
-router.get('/payroll-summary', async (req: Request, res: Response) => {
+/**
+ * GET /api/metrics/payroll-summary
+ * Returns aggregated payroll summary for a date range
+ * Requires authentication and company access
+ */
+router.get('/payroll-summary', async (req: AuthRequest, res: Response) => {
   const { companyId, startDate, endDate } = req.query;
 
-  if (!companyId) {
+  if (!companyId || typeof companyId !== 'string') {
     return res.status(400).json({ error: 'Company ID required' });
+  }
+
+  // Multi-tenant security: verify user has access to this company
+  if (!hasCompanyAccess(req, companyId)) {
+    return res.status(403).json({ error: 'Access denied to this company' });
   }
 
   const currentMonth = new Date();
@@ -168,12 +201,22 @@ router.get('/payroll-summary', async (req: Request, res: Response) => {
   });
 });
 
-// GET /api/metrics/top-earners
-router.get('/top-earners', async (req: Request, res: Response) => {
+/**
+ * GET /api/metrics/top-earners
+ * Returns top earners by gross pay for current month
+ * Requires authentication and company access
+ * SENSITIVE: Contains employee salary information
+ */
+router.get('/top-earners', async (req: AuthRequest, res: Response) => {
   const { companyId, limit = '10' } = req.query;
 
-  if (!companyId) {
+  if (!companyId || typeof companyId !== 'string') {
     return res.status(400).json({ error: 'Company ID required' });
+  }
+
+  // Multi-tenant security: verify user has access to this company
+  if (!hasCompanyAccess(req, companyId)) {
+    return res.status(403).json({ error: 'Access denied to this company' });
   }
 
   const currentMonth = new Date();

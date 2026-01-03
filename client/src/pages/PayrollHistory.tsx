@@ -73,8 +73,28 @@ export default function PayrollHistory() {
     })
   }
 
-  const handlePrintPDF = (payrollId: string) => {
-    window.open(`/api/payroll/${payrollId}/pdf`, '_blank')
+  const handlePrintPDF = async (payrollId: string) => {
+    try {
+      // Use axios to download PDF with authentication header
+      const response = await api.get(`/payroll/${payrollId}/pdf`, {
+        responseType: 'blob', // Important: tells axios to expect binary data
+      })
+
+      // Create blob from response
+      const blob = new Blob([response.data], { type: 'application/pdf' })
+
+      // Create temporary URL for the blob
+      const url = window.URL.createObjectURL(blob)
+
+      // Open PDF in new tab
+      window.open(url, '_blank')
+
+      // Clean up the temporary URL after a short delay
+      setTimeout(() => window.URL.revokeObjectURL(url), 100)
+    } catch (error) {
+      console.error('Failed to download PDF:', error)
+      alert('Failed to generate PDF. Please try again.')
+    }
   }
 
   // Calculate totals

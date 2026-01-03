@@ -1,12 +1,11 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../index.js';
 import { subMonths, format, startOfMonth, endOfMonth } from 'date-fns';
 import { Decimal } from 'decimal.js';
 import { AppError } from '../utils/AppError.js';
 import { hasCompanyAccess, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 /**
  * GET /api/metrics/cost-trend

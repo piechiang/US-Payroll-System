@@ -15,13 +15,12 @@
  */
 
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../index.js';
 import { z } from 'zod';
 import { AuthRequest, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
 import { logger } from '../services/logger.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Valid status transitions
 const STATUS_TRANSITIONS: Record<string, string[]> = {

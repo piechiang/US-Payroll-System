@@ -5,7 +5,7 @@
  */
 
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../index.js';
 import { z } from 'zod';
 import PDFDocument from 'pdfkit';
 import { AuthRequest, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
@@ -21,7 +21,6 @@ import { logger } from '../services/logger.js';
 import { exportLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Validation schemas
 const generateW2Schema = z.object({

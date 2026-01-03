@@ -170,7 +170,7 @@ export class UnsupportedStateError extends Error {
 
 // States with income tax calculators implemented (41 states + DC)
 const INCOME_TAX_STATES = [
-  'AL', // Alabama (TODO)
+  'AL', // Alabama
   'AR', // Arkansas
   'AZ', // Arizona
   'CA', // California

@@ -312,32 +312,45 @@ model AuditLog {
   id        String   @id @default(cuid())
 
   // Who performed the action
-  userId    String   // User who performed the action
-  companyId String   // Company context
+  userId      String?  // User who performed the action (nullable for failed logins)
+  userEmail   String?  // Email of user (cached for audit trail even if user deleted)
+  userRole    String?  // Role at time of action (ADMIN, ACCOUNTANT, MANAGER, VIEWER)
+  companyId   String?  // Company context (nullable for auth events)
 
   // What was accessed/modified
-  action      String   // CREATE, UPDATE, DELETE, VIEW, EXPORT, APPROVE, REJECT
-  entity      String   // EMPLOYEE, PAYROLL, COMPANY, TAX_INFO, W2_FORM, GARNISHMENT, CONTRACTOR
-  entityId    String   // ID of the specific resource
+  action      String   // CREATE, UPDATE, DELETE, VIEW, EXPORT, APPROVE, REJECT, LOGIN, LOGOUT, etc.
+  resource    String   // EMPLOYEE, PAYROLL, COMPANY, AUTH, EMPLOYEE_SSN, EMPLOYEE_BANK, etc.
+  resourceId  String?  // ID of the specific resource (nullable for bulk operations)
+  description String?  // Human-readable description of the action
 
   // Details
-  changes     String?  // JSON string for before/after values
   metadata    String?  // JSON string for additional context
+  changes     String?  // JSON string for before/after values (for UPDATE actions)
   requestId   String?  // Request tracking ID
+
+  // Where (security context)
+  ipAddress   String?  // Client IP address
+  userAgent   String?  // Browser/client user agent
+
+  // Outcome
+  success      Boolean  @default(true)  // Whether the action succeeded
+  errorMessage String?  // Error message if action failed
 
   // When
   timestamp   DateTime @default(now())
   createdAt   DateTime @default(now())
 
-  // Relations
-  user        User     @relation(fields: [userId], references: [id])
+  // Relations (nullable userId for failed logins)
+  user        User?    @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([companyId])
   @@index([action])
-  @@index([entity])
-  @@index([entityId])
+  @@index([resource])
+  @@index([resourceId])
   @@index([timestamp])
+  @@index([ipAddress])
+  @@index([success])
   @@map("audit_logs")
 }
 

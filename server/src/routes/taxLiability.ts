@@ -7,6 +7,16 @@ import { logger } from '../services/logger.js';
 
 const router = Router();
 
+/**
+ * Social Security wage cap by year
+ * Source: Social Security Administration
+ */
+const SOCIAL_SECURITY_WAGE_CAP: Record<number, number> = {
+  2023: 160200,
+  2024: 168600,
+  2025: 176100
+};
+
 // Type for payroll records
 type PayrollRecord = Prisma.PayrollGetPayload<object>;
 
@@ -110,6 +120,31 @@ router.get('/941', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
     }
 
     const { start, end } = getQuarterDates(query.year, query.quarter);
+    const ssWageCap = SOCIAL_SECURITY_WAGE_CAP[query.year] || 168600;
+
+    // Get YTD wages for all employees up to the start of the quarter
+    const yearStart = new Date(query.year, 0, 1);
+    const priorToQuarterPayrolls = await prisma.payroll.findMany({
+      where: {
+        companyId: query.companyId,
+        payDate: {
+          gte: yearStart,
+          lt: start
+        },
+        status: { not: 'VOID' }
+      },
+      select: {
+        employeeId: true,
+        grossPay: true
+      }
+    });
+
+    // Calculate YTD wages before this quarter for each employee
+    const employeeYTDBeforeQuarter = new Map<string, number>();
+    for (const payroll of priorToQuarterPayrolls) {
+      const existing = employeeYTDBeforeQuarter.get(payroll.employeeId) || 0;
+      employeeYTDBeforeQuarter.set(payroll.employeeId, existing + Number(payroll.grossPay));
+    }
 
     // Get all payrolls for the quarter
     const payrolls = await prisma.payroll.findMany({
@@ -138,6 +173,9 @@ router.get('/941', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
     let totalMedicareTax = 0;
     let totalTips = 0;
 
+    // Track per-employee YTD during quarter for wage cap calculation
+    const employeeYTD = new Map<string, number>(employeeYTDBeforeQuarter);
+
     // Group by month for monthly depositors
     const monthlyLiability: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
 
@@ -161,6 +199,19 @@ router.get('/941', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
       const creditCardTips = Number(payroll.creditCardTips || 0);
       const cashTips = Number(payroll.cashTips || 0);
 
+      // Calculate Social Security taxable wages considering wage cap
+      const ytdBefore = employeeYTD.get(payroll.employeeId) || 0;
+      let ssTaxableWages = 0;
+
+      if (ytdBefore < ssWageCap) {
+        // Employee hasn't hit the cap yet
+        ssTaxableWages = Math.min(grossPay, ssWageCap - ytdBefore);
+      }
+      // If ytdBefore >= ssWageCap, employee already exceeded cap, so ssTaxableWages = 0
+
+      // Update employee YTD
+      employeeYTD.set(payroll.employeeId, ytdBefore + grossPay);
+
       // Total employer + employee FICA
       const totalSSForPeriod = socialSecurity + employerSS;
       const totalMedicareForPeriod = medicare + employerMedicare;
@@ -168,9 +219,9 @@ router.get('/941', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
 
       totalWages += grossPay;
       totalFederalWithholding += federalWithholding;
-      totalSocialSecurityWages += grossPay; // Simplified - should consider wage cap
+      totalSocialSecurityWages += ssTaxableWages; // Now properly considers wage cap
       totalSocialSecurityTax += totalSSForPeriod;
-      totalMedicareWages += grossPay;
+      totalMedicareWages += grossPay; // Medicare has no wage cap
       totalMedicareTax += totalMedicareForPeriod;
       totalTips += creditCardTips + cashTips;
 

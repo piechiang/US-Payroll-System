@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { DollarSign, Calculator, Check, AlertCircle, Loader2 } from 'lucide-react'
+import { DollarSign, Calculator, Check } from 'lucide-react'
 import { api } from '../services/api'
 
 interface Employee {
@@ -9,6 +9,18 @@ interface Employee {
   lastName: string
   payType: 'HOURLY' | 'SALARY'
   payRate: string
+}
+
+interface EmployeesResponse {
+  data: Employee[]
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+    hasNext: boolean
+    hasPrev: boolean
+  }
 }
 
 interface PayrollPreview {
@@ -55,11 +67,13 @@ export default function RunPayroll() {
   })
 
   // Fetch employees for selected company
-  const { data: employees = [] } = useQuery<Employee[]>({
+  const { data: employeesResponse } = useQuery<EmployeesResponse>({
     queryKey: ['employees', selectedCompany],
     queryFn: () => api.get(`/employees?companyId=${selectedCompany}`).then(res => res.data),
     enabled: !!selectedCompany
   })
+
+  const employees = employeesResponse?.data || []
 
   // Calculate preview mutation
   const calculateMutation = useMutation({

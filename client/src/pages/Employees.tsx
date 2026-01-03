@@ -19,13 +19,27 @@ interface Employee {
   }
 }
 
+interface EmployeesResponse {
+  data: Employee[]
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+    hasNext: boolean
+    hasPrev: boolean
+  }
+}
+
 export default function Employees() {
   const [searchTerm, setSearchTerm] = useState('')
 
-  const { data: employees = [], isLoading } = useQuery<Employee[]>({
+  const { data: employeesResponse, isLoading } = useQuery<EmployeesResponse>({
     queryKey: ['employees'],
     queryFn: () => api.get('/employees').then(res => res.data)
   })
+
+  const employees = employeesResponse?.data || []
 
   const filteredEmployees = employees.filter(emp =>
     `${emp.firstName} ${emp.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||

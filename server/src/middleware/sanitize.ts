@@ -3,12 +3,28 @@ import { Request, Response, NextFunction } from 'express';
 /**
  * Input Sanitization Middleware
  *
- * Sanitizes request body, query params, and params to prevent XSS attacks.
- * Does NOT modify values - only validates and rejects dangerous input.
+ * Protects against XSS attacks by detecting dangerous HTML/JavaScript patterns.
+ *
+ * NOTE ON SQL INJECTION:
+ * This middleware does NOT check for SQL injection patterns because:
+ * 1. Prisma ORM uses parameterized queries that prevent SQL injection by design
+ * 2. SQL keyword patterns (SELECT, DROP, OR, etc.) cause false positives
+ *    - Legitimate use cases: "Selector Tool", "Drop-in Support", "OR gate operator"
+ *    - Department names, job titles, descriptions may contain SQL keywords
+ * 3. Defense in depth: SQL injection is prevented at the ORM layer (Prisma)
+ *    - All database queries use parameterized statements
+ *    - User input is never concatenated into SQL strings
+ *    - Prisma automatically escapes and validates all parameters
+ *
+ * For additional protection against raw SQL queries (if any):
+ * - Always use Prisma's query builder methods
+ * - Never use prisma.$queryRaw with string concatenation
+ * - Use prisma.$queryRaw`...` template literals (parameterized)
+ * - Validate data types with Zod schemas before database operations
  */
 
-// Patterns that indicate potential XSS or injection attacks
-const DANGEROUS_PATTERNS = [
+// Patterns that indicate potential XSS attacks
+const XSS_PATTERNS = [
   /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,  // Script tags
   /javascript:/gi,                                         // javascript: protocol
   /on\w+\s*=/gi,                                          // Event handlers (onclick=, onerror=, etc.)
@@ -17,29 +33,17 @@ const DANGEROUS_PATTERNS = [
   /<object/gi,                                            // object tags
   /<embed/gi,                                             // embed tags
   /<svg\b[^>]*onload/gi,                                  // SVG with onload
-];
-
-// SQL injection patterns (basic detection)
-const SQL_INJECTION_PATTERNS = [
-  /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE)\b.*\b(FROM|INTO|TABLE|DATABASE)\b)/gi,
-  /(\b(UNION)\b.*\b(SELECT)\b)/gi,
-  /(--|\#|\/\*)/g,  // SQL comments
-  /(\b(OR|AND)\b\s+\d+\s*=\s*\d+)/gi,  // OR 1=1, AND 1=1
+  /<img[^>]+on\w+/gi,                                     // img tags with event handlers
+  /vbscript:/gi,                                          // vbscript: protocol
 ];
 
 /**
- * Check if a string contains dangerous patterns
+ * Check if a string contains dangerous XSS patterns
  */
 function containsDangerousContent(value: string): { dangerous: boolean; pattern?: string } {
-  for (const pattern of DANGEROUS_PATTERNS) {
+  for (const pattern of XSS_PATTERNS) {
     if (pattern.test(value)) {
       return { dangerous: true, pattern: 'XSS' };
-    }
-  }
-
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { dangerous: true, pattern: 'SQL Injection' };
     }
   }
 

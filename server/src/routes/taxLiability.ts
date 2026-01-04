@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../index.js';
 import { z } from 'zod';
-import { AuthRequest, hasCompanyAccess, authorizeRoles } from '../middleware/auth.js';
+import { AuthRequest, hasCompanyAccess, authorizeCompanyRole } from '../middleware/auth.js';
 import { logger } from '../services/logger.js';
 
 const router = Router();
@@ -87,7 +87,7 @@ const periodQuerySchema = z.object({
  * - year: Tax year
  * - quarter: Quarter (1-4)
  */
-router.get('/941', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.get('/941', authorizeCompanyRole('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   try {
     const query = periodQuerySchema.parse(req.query);
 
@@ -340,7 +340,7 @@ router.get('/941', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
  * GET /api/tax-liability/state-withholding
  * Get state income tax withholding liability report
  */
-router.get('/state-withholding', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.get('/state-withholding', authorizeCompanyRole('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   try {
     const query = periodQuerySchema.parse(req.query);
 
@@ -517,7 +517,7 @@ router.get('/state-withholding', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'
  * GET /api/tax-liability/deposit-schedule
  * Get upcoming tax deposit due dates and amounts
  */
-router.get('/deposit-schedule', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.get('/deposit-schedule', authorizeCompanyRole('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   try {
     const { companyId } = req.query;
 
@@ -656,7 +656,7 @@ router.get('/deposit-schedule', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER')
  * GET /api/tax-liability/summary
  * Get tax liability summary for a period
  */
-router.get('/summary', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.get('/summary', authorizeCompanyRole('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   try {
     const query = periodQuerySchema.parse(req.query);
 
@@ -795,7 +795,7 @@ const FUTA_WAGE_BASE: Record<number, number> = {
  * - companyId: Company ID
  * - year: Tax year
  */
-router.get('/940', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (req: AuthRequest, res: Response) => {
+router.get('/940', authorizeCompanyRole('ADMIN', 'ACCOUNTANT'), async (req: AuthRequest, res: Response) => {
   try {
     const query = z.object({
       companyId: z.string(),

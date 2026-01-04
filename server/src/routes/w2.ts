@@ -8,7 +8,7 @@ import { Router, Response } from 'express';
 import { prisma } from '../index.js';
 import { z } from 'zod';
 import PDFDocument from 'pdfkit';
-import { AuthRequest, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
+import { AuthRequest, authorizeCompanyRole, hasCompanyAccess, isRoleAllowed } from '../middleware/auth.js';
 import { decrypt, maskSSN, isEncrypted } from '../services/encryption.js';
 import {
   generateW2ForEmployee,
@@ -38,7 +38,7 @@ const taxYearQuerySchema = z.object({
  * Generate W-2 forms for employees
  * Rate limited: 10 exports per hour
  */
-router.post('/generate', authorizeRoles('ADMIN', 'ACCOUNTANT'), exportLimiter, async (req: AuthRequest, res: Response) => {
+router.post('/generate', authorizeCompanyRole('ADMIN', 'ACCOUNTANT'), exportLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const data = generateW2Schema.parse(req.body);
 
@@ -264,7 +264,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
  * Download W-2 as PDF
  * Rate limited: 10 exports per hour
  */
-router.get('/:id/pdf', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), exportLimiter, async (req: AuthRequest, res: Response) => {
+router.get('/:id/pdf', exportLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const w2 = await prisma.w2Form.findUnique({
       where: { id: req.params.id },
@@ -281,6 +281,12 @@ router.get('/:id/pdf', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), exportL
     // Multi-tenant check
     if (!hasCompanyAccess(req, w2.companyId)) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN', 'ACCOUNTANT', 'MANAGER'], w2.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN, ACCOUNTANT, MANAGER'
+      });
     }
 
     // Generate PDF
@@ -352,7 +358,7 @@ router.get('/employee/:employeeId', async (req: AuthRequest, res: Response) => {
  * DELETE /api/w2/:id
  * Delete a W-2 form (only DRAFT status)
  */
-router.delete('/:id', authorizeRoles('ADMIN'), async (req: AuthRequest, res: Response) => {
+router.delete('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const w2 = await prisma.w2Form.findUnique({
       where: { id: req.params.id }
@@ -364,6 +370,12 @@ router.delete('/:id', authorizeRoles('ADMIN'), async (req: AuthRequest, res: Res
 
     if (!hasCompanyAccess(req, w2.companyId)) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN'], w2.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN'
+      });
     }
 
     if (w2.status !== 'DRAFT') {

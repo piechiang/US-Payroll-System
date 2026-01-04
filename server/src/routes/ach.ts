@@ -7,7 +7,7 @@
 import { Router, Response } from 'express';
 import { prisma } from '../index.js';
 import { z } from 'zod';
-import { AuthRequest, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
+import { AuthRequest, hasCompanyAccess, isRoleAllowed } from '../middleware/auth.js';
 import { decrypt, isEncrypted } from '../services/encryption.js';
 import {
   generateACHFile,
@@ -39,7 +39,7 @@ const generateACHSchema = z.object({
  * Generate an ACH file for a pay period
  * Rate limited: 10 exports per hour
  */
-router.post('/generate', authorizeRoles('ADMIN', 'ACCOUNTANT'), exportLimiter, async (req: AuthRequest, res: Response) => {
+router.post('/generate', exportLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const data = generateACHSchema.parse(req.body);
 
@@ -72,6 +72,12 @@ router.post('/generate', authorizeRoles('ADMIN', 'ACCOUNTANT'), exportLimiter, a
 
     if (!hasCompanyAccess(req, payPeriod.companyId)) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN', 'ACCOUNTANT'], payPeriod.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN, ACCOUNTANT'
+      });
     }
 
     // Only generate ACH for approved or processed payrolls
@@ -214,7 +220,7 @@ router.post('/generate', authorizeRoles('ADMIN', 'ACCOUNTANT'), exportLimiter, a
  * GET /api/ach/preview/:payPeriodId
  * Preview direct deposit details before generating ACH
  */
-router.get('/preview/:payPeriodId', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (req: AuthRequest, res: Response) => {
+router.get('/preview/:payPeriodId', async (req: AuthRequest, res: Response) => {
   try {
     const payPeriod = await prisma.payPeriod.findUnique({
       where: { id: req.params.payPeriodId },
@@ -246,6 +252,12 @@ router.get('/preview/:payPeriodId', authorizeRoles('ADMIN', 'ACCOUNTANT'), async
 
     if (!hasCompanyAccess(req, payPeriod.companyId)) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN', 'ACCOUNTANT'], payPeriod.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN, ACCOUNTANT'
+      });
     }
 
     // Categorize employees
@@ -332,7 +344,7 @@ router.post('/validate-routing', async (req: AuthRequest, res: Response) => {
  * Download ACH file directly
  * Rate limited: 10 exports per hour
  */
-router.get('/download/:payPeriodId', authorizeRoles('ADMIN', 'ACCOUNTANT'), exportLimiter, async (req: AuthRequest, res: Response) => {
+router.get('/download/:payPeriodId', exportLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { effectiveDate, immediateDestination, immediateDestinationName, companyBankRouting, companyBankAccount } = req.query;
 
@@ -385,6 +397,12 @@ router.get('/download/:payPeriodId', authorizeRoles('ADMIN', 'ACCOUNTANT'), expo
 
     if (!hasCompanyAccess(req, payPeriod.companyId)) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN', 'ACCOUNTANT'], payPeriod.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN, ACCOUNTANT'
+      });
     }
 
     // Filter and build entries (same as generate)

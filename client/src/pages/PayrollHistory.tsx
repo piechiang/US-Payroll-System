@@ -22,6 +22,7 @@ interface PayrollRecord {
 interface Company {
   id: string
   name: string
+  companyRole?: string
 }
 
 export default function PayrollHistory() {
@@ -101,6 +102,7 @@ export default function PayrollHistory() {
   const totalGross = payrolls.reduce((sum, p) => sum + parseFloat(p.grossPay), 0)
   const totalNet = payrolls.reduce((sum, p) => sum + parseFloat(p.netPay), 0)
   const totalDeductions = payrolls.reduce((sum, p) => sum + parseFloat(p.totalDeductions), 0)
+  const selectedCompanyRole = companies.find(company => company.id === selectedCompany)?.companyRole
 
   return (
     <div>
@@ -131,6 +133,14 @@ export default function PayrollHistory() {
                 <option key={company.id} value={company.id}>{company.name}</option>
               ))}
             </select>
+            {selectedCompany && (
+              <p className="mt-2 text-xs text-gray-500">
+                Role for selected company:{' '}
+                <span className="font-medium text-gray-700">
+                  {selectedCompanyRole || 'VIEWER'}
+                </span>
+              </p>
+            )}
           </div>
           {payrolls.length > 0 && (
             <div className="ml-auto text-sm text-gray-600">

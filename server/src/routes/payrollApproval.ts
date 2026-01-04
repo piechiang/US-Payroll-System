@@ -17,7 +17,7 @@
 import { Router, Response } from 'express';
 import { prisma } from '../index.js';
 import { z } from 'zod';
-import { AuthRequest, authorizeRoles, hasCompanyAccess } from '../middleware/auth.js';
+import { AuthRequest, hasCompanyAccess, isRoleAllowed } from '../middleware/auth.js';
 import { logger } from '../services/logger.js';
 
 const router = Router();
@@ -34,26 +34,52 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
   VOID: []  // Terminal state
 };
 
-// Roles that can approve payroll
-const APPROVER_ROLES = ['ADMIN', 'MANAGER'];
-
 /**
  * GET /api/payroll-approval/pending
  * Get all payroll periods pending approval for accessible companies
  */
-router.get('/pending', authorizeRoles('ADMIN', 'MANAGER', 'ACCOUNTANT'), async (req: AuthRequest, res: Response) => {
+router.get('/pending', async (req: AuthRequest, res: Response) => {
   try {
     const { companyId } = req.query;
+    const allowedRoles = ['ADMIN', 'MANAGER', 'ACCOUNTANT'];
 
     const where: any = {
       status: 'PENDING_APPROVAL'
     };
 
     if (companyId) {
+      if (!isRoleAllowed(req, allowedRoles, String(companyId))) {
+        return res.status(403).json({
+          error: 'Access denied',
+          message: `This action requires one of the following roles: ${allowedRoles.join(', ')}`
+        });
+      }
       if (!hasCompanyAccess(req, String(companyId))) {
         return res.status(403).json({ error: 'Access denied to this company' });
       }
       where.companyId = String(companyId);
+    } else if (req.companyRoles && Object.keys(req.companyRoles).length > 0) {
+      const allowedCompanyIds = Object.entries(req.companyRoles)
+        .filter(([, role]) => allowedRoles.includes(role))
+        .map(([id]) => id);
+
+      if (allowedCompanyIds.length === 0 && !isRoleAllowed(req, allowedRoles)) {
+        return res.status(403).json({
+          error: 'Access denied',
+          message: `This action requires one of the following roles: ${allowedRoles.join(', ')}`
+        });
+      }
+
+      if (allowedCompanyIds.length > 0) {
+        where.companyId = { in: allowedCompanyIds };
+      } else if (req.accessibleCompanyIds && req.accessibleCompanyIds.length > 0) {
+        where.companyId = { in: req.accessibleCompanyIds };
+      }
+    } else if (!isRoleAllowed(req, allowedRoles)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: `This action requires one of the following roles: ${allowedRoles.join(', ')}`
+      });
     } else if (req.accessibleCompanyIds && req.accessibleCompanyIds.length > 0) {
       where.companyId = { in: req.accessibleCompanyIds };
     }
@@ -229,7 +255,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
  * POST /api/payroll-approval/:id/submit
  * Submit a payroll period for approval
  */
-router.post('/:id/submit', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (req: AuthRequest, res: Response) => {
+router.post('/:id/submit', async (req: AuthRequest, res: Response) => {
   try {
     const period = await prisma.payPeriod.findUnique({
       where: { id: req.params.id }
@@ -241,6 +267,12 @@ router.post('/:id/submit', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (req: Au
 
     if (!hasCompanyAccess(req, period.companyId)) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN', 'ACCOUNTANT'], period.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN, ACCOUNTANT'
+      });
     }
 
     // Validate status transition
@@ -293,7 +325,7 @@ router.post('/:id/submit', authorizeRoles('ADMIN', 'ACCOUNTANT'), async (req: Au
  * POST /api/payroll-approval/:id/approve
  * Approve a pending payroll
  */
-router.post('/:id/approve', authorizeRoles('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.post('/:id/approve', async (req: AuthRequest, res: Response) => {
   try {
     const period = await prisma.payPeriod.findUnique({
       where: { id: req.params.id }
@@ -305,6 +337,12 @@ router.post('/:id/approve', authorizeRoles('ADMIN', 'MANAGER'), async (req: Auth
 
     if (!hasCompanyAccess(req, period.companyId)) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN', 'MANAGER'], period.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN, MANAGER'
+      });
     }
 
     // Validate status transition
@@ -349,7 +387,7 @@ router.post('/:id/approve', authorizeRoles('ADMIN', 'MANAGER'), async (req: Auth
  * POST /api/payroll-approval/:id/reject
  * Reject a pending payroll with notes
  */
-router.post('/:id/reject', authorizeRoles('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.post('/:id/reject', async (req: AuthRequest, res: Response) => {
   try {
     const schema = z.object({
       note: z.string().min(1, 'Rejection reason is required').max(1000)
@@ -367,6 +405,12 @@ router.post('/:id/reject', authorizeRoles('ADMIN', 'MANAGER'), async (req: AuthR
 
     if (!hasCompanyAccess(req, period.companyId)) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN', 'MANAGER'], period.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN, MANAGER'
+      });
     }
 
     // Validate status transition
@@ -408,7 +452,7 @@ router.post('/:id/reject', authorizeRoles('ADMIN', 'MANAGER'), async (req: AuthR
  * POST /api/payroll-approval/:id/void
  * Void/cancel a payroll period
  */
-router.post('/:id/void', authorizeRoles('ADMIN'), async (req: AuthRequest, res: Response) => {
+router.post('/:id/void', async (req: AuthRequest, res: Response) => {
   try {
     const schema = z.object({
       reason: z.string().min(1, 'Void reason is required').max(1000)
@@ -426,6 +470,12 @@ router.post('/:id/void', authorizeRoles('ADMIN'), async (req: AuthRequest, res: 
 
     if (!hasCompanyAccess(req, period.companyId)) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isRoleAllowed(req, ['ADMIN'], period.companyId)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'This action requires one of the following roles: ADMIN'
+      });
     }
 
     // Cannot void already paid payroll

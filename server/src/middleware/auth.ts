@@ -42,6 +42,8 @@ export interface AuthRequest extends Request {
   };
   // Companies the user has access to
   accessibleCompanyIds?: string[];
+  companyRoles?: Record<string, string>;
+  companyAccess?: Array<{ companyId: string; role: string }>;
 }
 
 /**
@@ -73,10 +75,18 @@ export async function authenticate(
       // Fetch accessible company IDs for this user
       const companyAccess = await prisma.companyAccess.findMany({
         where: { userId: decoded.userId },
-        select: { companyId: true }
+        select: { companyId: true, role: true }
       });
 
       req.accessibleCompanyIds = companyAccess.map((ca: { companyId: string }) => ca.companyId);
+      req.companyRoles = companyAccess.reduce<Record<string, string>>((acc, access) => {
+        acc[access.companyId] = access.role;
+        return acc;
+      }, {});
+      req.companyAccess = companyAccess.map(access => ({
+        companyId: access.companyId,
+        role: access.role
+      }));
 
       next();
     } catch (jwtError) {
@@ -147,6 +157,70 @@ export function authorizeRoles(...allowedRoles: string[]) {
 
     next();
   };
+}
+
+/**
+ * Company-level role authorization middleware
+ * - Uses company role when available, falling back to global role
+ * - If a companyId is present, the company role takes precedence
+ */
+export function authorizeCompanyRole(...allowedRoles: string[]) {
+  return authorizeCompanyRoleForParam('companyId', ...allowedRoles);
+}
+
+export function authorizeCompanyRoleForParam(companyIdParam: string, ...allowedRoles: string[]) {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const companyId =
+      req.params[companyIdParam] ||
+      req.body?.companyId ||
+      req.query?.companyId;
+
+    if (companyId) {
+      const effectiveRole = getEffectiveRole(req, String(companyId));
+      if (!effectiveRole || !allowedRoles.includes(effectiveRole)) {
+        return res.status(403).json({
+          error: 'Access denied',
+          message: `This action requires one of the following roles: ${allowedRoles.join(', ')}`
+        });
+      }
+
+      return next();
+    }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: `This action requires one of the following roles: ${allowedRoles.join(', ')}`
+      });
+    }
+
+    next();
+  };
+}
+
+export function getEffectiveRole(req: AuthRequest, companyId?: string): string | undefined {
+  if (!req.user) {
+    return undefined;
+  }
+
+  if (companyId && req.companyRoles?.[companyId]) {
+    return req.companyRoles[companyId];
+  }
+
+  return req.user.role;
+}
+
+export function isRoleAllowed(
+  req: AuthRequest,
+  allowedRoles: string[],
+  companyId?: string
+): boolean {
+  const role = getEffectiveRole(req, companyId);
+  return Boolean(role && allowedRoles.includes(role));
 }
 
 /**

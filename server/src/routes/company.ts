@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { prisma } from '../index.js';
 import { z } from 'zod';
-import { AuthRequest, filterByAccessibleCompanies, hasCompanyAccess, authorizeRoles } from '../middleware/auth.js';
+import { AuthRequest, filterByAccessibleCompanies, hasCompanyAccess, authorizeCompanyRoleForParam } from '../middleware/auth.js';
 import { logger } from '../services/logger.js';
 
 const router = Router();
@@ -88,7 +88,12 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       orderBy: { name: 'asc' }
     });
 
-    res.json(companies);
+    const companiesWithRoles = companies.map(company => ({
+      ...company,
+      companyRole: req.companyRoles?.[company.id] || req.user?.role || 'VIEWER'
+    }));
+
+    res.json(companiesWithRoles);
   } catch (error) {
     logger.error('Error fetching companies:', error);
     res.status(500).json({ error: 'Failed to fetch companies' });
@@ -179,7 +184,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 // PUT /api/companies/:id - Update company
 // Multi-tenant: Verifies user has access to this company
 // Role restriction: Only ADMIN, ACCOUNTANT, or MANAGER can update companies
-router.put('/:id', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+router.put('/:id', authorizeCompanyRoleForParam('id', 'ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   try {
     // Multi-tenant check
     // SECURITY: Uses hasCompanyAccess which properly handles empty accessibleCompanyIds
@@ -235,7 +240,7 @@ router.put('/:id', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
 // DELETE /api/companies/:id - Soft delete company
 // Multi-tenant: Verifies user has access to this company
 // Role restriction: Only ADMIN can deactivate companies
-router.delete('/:id', authorizeRoles('ADMIN'), async (req: AuthRequest, res: Response) => {
+router.delete('/:id', authorizeCompanyRoleForParam('id', 'ADMIN'), async (req: AuthRequest, res: Response) => {
   try {
     // Multi-tenant check
     // SECURITY: Uses hasCompanyAccess which properly handles empty accessibleCompanyIds

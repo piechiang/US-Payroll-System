@@ -365,6 +365,139 @@ router.post('/logout', authenticate, async (req: AuthRequest, res: Response) => 
   }
 });
 
+// Company access role management (ADMIN only)
+const companyAccessSchema = z.object({
+  userId: z.string(),
+  companyId: z.string(),
+  role: z.enum(['ADMIN', 'ACCOUNTANT', 'MANAGER', 'VIEWER'])
+});
+
+// GET /api/auth/company-access - List company access assignments
+router.get('/company-access', authenticate, authorizeRoles('ADMIN'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId, companyId } = req.query;
+
+    const accessList = await prisma.companyAccess.findMany({
+      where: {
+        userId: userId ? String(userId) : undefined,
+        companyId: companyId ? String(companyId) : undefined
+      },
+      include: {
+        user: {
+          select: { id: true, email: true, firstName: true, lastName: true }
+        },
+        company: {
+          select: { id: true, name: true, ein: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json(accessList);
+  } catch (error) {
+    logger.error('Error listing company access:', error);
+    res.status(500).json({ error: 'Failed to list company access' });
+  }
+});
+
+// GET /api/auth/company-access/me - List current user's company roles
+router.get('/company-access/me', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user?.userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const accessList = await prisma.companyAccess.findMany({
+      where: { userId: req.user.userId },
+      select: {
+        companyId: true,
+        role: true,
+        company: {
+          select: { id: true, name: true, ein: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json(accessList);
+  } catch (error) {
+    logger.error('Error fetching company access for user:', error);
+    res.status(500).json({ error: 'Failed to fetch company access' });
+  }
+});
+
+// PUT /api/auth/company-access - Upsert company access role
+router.put('/company-access', authenticate, authorizeRoles('ADMIN'), async (req: AuthRequest, res: Response) => {
+  try {
+    const data = companyAccessSchema.parse(req.body);
+
+    const [user, company] = await Promise.all([
+      prisma.user.findUnique({ where: { id: data.userId }, select: { id: true } }),
+      prisma.company.findUnique({ where: { id: data.companyId }, select: { id: true } })
+    ]);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const access = await prisma.companyAccess.upsert({
+      where: { userId_companyId: { userId: data.userId, companyId: data.companyId } },
+      update: { role: data.role },
+      create: {
+        userId: data.userId,
+        companyId: data.companyId,
+        role: data.role
+      },
+      include: {
+        user: {
+          select: { id: true, email: true, firstName: true, lastName: true }
+        },
+        company: {
+          select: { id: true, name: true, ein: true }
+        }
+      }
+    });
+
+    res.json({
+      message: 'Company access updated successfully',
+      access
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: error.errors });
+    }
+    logger.error('Error updating company access:', error);
+    res.status(500).json({ error: 'Failed to update company access' });
+  }
+});
+
+// DELETE /api/auth/company-access - Remove company access role
+router.delete('/company-access', authenticate, authorizeRoles('ADMIN'), async (req: AuthRequest, res: Response) => {
+  try {
+    const schema = z.object({
+      userId: z.string(),
+      companyId: z.string()
+    });
+
+    const { userId, companyId } = schema.parse(req.body);
+
+    await prisma.companyAccess.delete({
+      where: { userId_companyId: { userId, companyId } }
+    });
+
+    res.json({ message: 'Company access removed successfully' });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: error.errors });
+    }
+    logger.error('Error removing company access:', error);
+    res.status(500).json({ error: 'Failed to remove company access' });
+  }
+});
+
 // GET /api/auth/password-requirements - Get password requirements (public)
 router.get('/password-requirements', (_req, res: Response) => {
   res.json({

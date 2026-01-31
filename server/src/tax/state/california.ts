@@ -51,8 +51,12 @@ export async function calculateCaliforniaTax(
     grossPay,
     filingStatus,
     payPeriodsPerYear,
-    ytdGrossWages = 0
+    ytdGrossWages = 0,
+    stateSpecificArgs
   } = input;
+
+  // Extract CA-specific args
+  const childrenUnder6 = stateSpecificArgs?.childrenUnder6 || 0;
 
   // Determine tax year (default to current year if not specified)
   const year = taxYear || new Date().getFullYear();

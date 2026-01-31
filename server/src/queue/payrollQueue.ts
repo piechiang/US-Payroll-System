@@ -295,8 +295,8 @@ export function createPayrollWorker() {
           data: {
             status: errorCount > 0 && errorCount === employeePayData.length ? 'FAILED' : 'COMPLETED',
             completedAt: new Date(),
-            resultsSummary: summary,
-            errorDetails: errors.length > 0 ? errors : undefined,
+            resultsSummary: JSON.stringify(summary),
+            errorDetails: errors.length > 0 ? JSON.stringify(errors) : undefined,
             errorMessage: errorCount > 0 ? `${errorCount} errors occurred during processing` : undefined
           }
         });

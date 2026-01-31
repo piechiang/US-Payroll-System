@@ -98,6 +98,9 @@ function maskEmployeeData(employee: any) {
     ssn: maskSSN(employee.ssn),
     bankAccountNumber: maskedBankAccount,
     bankRoutingNumber: maskedBankRouting,
+    customTaxProps: typeof employee.customTaxProps === 'string'
+      ? JSON.parse(employee.customTaxProps)
+      : employee.customTaxProps,
   };
 }
 
@@ -173,7 +176,10 @@ const baseEmployeeSchema = z.object({
     z.enum(['CHECKING', 'SAVINGS']).optional()
   ),
 
-  companyId: z.string()
+  companyId: z.string(),
+
+  // Custom tax properties (flexible state-specific args)
+  customTaxProps: z.record(z.any()).optional()
 });
 
 // Refinement function for work location and 401k validation
@@ -441,7 +447,8 @@ router.post('/', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req: A
         ssnHash: ssnHashValue,                    // Store hash for duplicate detection
         bankAccountNumber: encryptedBankAccount,  // Store encrypted bank account
         bankRoutingNumber: encryptedBankRouting,  // Store encrypted routing number
-        isActive: true
+        isActive: true,
+        customTaxProps: data.customTaxProps ? JSON.stringify(data.customTaxProps) : undefined
       }
     });
 
@@ -649,6 +656,11 @@ router.put('/:id', authorizeRoles('ADMIN', 'ACCOUNTANT', 'MANAGER'), async (req:
     }
     if (updateData.bankRoutingNumber) {
       updateData.bankRoutingNumber = encryptIfNeeded(updateData.bankRoutingNumber);
+    }
+
+    // Stringify customTaxProps if present
+    if (updateData.customTaxProps) {
+      updateData.customTaxProps = JSON.stringify(updateData.customTaxProps);
     }
 
     const employee = await prisma.employee.update({

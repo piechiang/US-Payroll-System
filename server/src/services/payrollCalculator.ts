@@ -162,13 +162,26 @@ export class PayrollCalculator {
     const payDate = new Date(payPeriodEnd);
     const taxYear = payDate.getFullYear();
 
+    // Parse custom tax properties (stored as JSON string in SQLite)
+    let stateArgs = undefined;
+    if (employee.customTaxProps) {
+      try {
+        stateArgs = typeof employee.customTaxProps === 'string'
+          ? JSON.parse(employee.customTaxProps)
+          : employee.customTaxProps;
+      } catch (e) {
+        console.warn('Failed to parse customTaxProps for employee', employee.id);
+      }
+    }
+
     const stateTax = await calculateStateTax({
       state: employee.state,
       grossPay: earnings.grossPay,
       annualIncome: estimatedAnnualIncome,
       filingStatus: employee.filingStatus,
       payPeriodsPerYear,
-      ytdGrossWages // For SDI wage cap (e.g., California)
+      ytdGrossWages, // For SDI wage cap (e.g., California)
+      stateSpecificArgs: stateArgs
     }, taxYear);
 
     // Calculate local/city taxes (Maryland requires county-based local tax)

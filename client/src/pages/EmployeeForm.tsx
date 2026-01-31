@@ -34,6 +34,11 @@ interface EmployeeFormData {
   workState?: string
   localResident?: boolean
   companyId: string
+  customTaxProps?: {
+    childrenUnder6?: number
+    residencyStatus?: string
+    [key: string]: any
+  }
 }
 
 const US_STATES = [
@@ -531,327 +536,373 @@ export default function EmployeeForm() {
                     <p className="mt-1 text-xs text-slate-500">Beyond standard deduction (annual)</p>
                   </div>
                 </div>
-              </Tab.Panel>
 
-              {/* Retirement (401k) Tab */}
-              <Tab.Panel className="space-y-6 animate-fade-in">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                      Contribution Type
-                    </label>
-                    <select
-                      {...register('retirement401kType', {
-                        setValueAs: value => value === '' ? null : value
-                      })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:border-indigo-500 focus:ring-indigo-200"
-                    >
-                      <option value="">None</option>
-                      <option value="PERCENT">Percent of gross pay</option>
-                      <option value="FIXED">Flat amount per pay period</option>
-                    </select>
+                {/* State Tax Information */}
+                {(watchState === 'CA' || watchState === 'NY') && (
+                  <div className="mt-6 pt-6 border-t border-slate-200 animate-fade-in">
+                    <h3 className="text-sm font-semibold text-slate-900 mb-4">State Tax Information ({watchState})</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {watchState === 'CA' && (
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-2">
+                            Children Under 6
+                          </label>
+                          <input
+                            type="number"
+                            {...register('customTaxProps.childrenUnder6', {
+                              min: { value: 0, message: 'Cannot be negative' },
+                              valueAsNumber: true
+                            })}
+                            defaultValue={0}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:border-indigo-500 focus:ring-indigo-200"
+                          />
+                          <p className="mt-1 text-xs text-slate-500">For CA Young Child Tax Credit</p>
+                        </div>
+                      )}
+
+                      {watchState === 'NY' && (
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-2">
+                            Residency Status
+                          </label>
+                          <select
+                            {...register('customTaxProps.residencyStatus')}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:border-indigo-500 focus:ring-indigo-200"
+                          >
+                            <option value="NONE">None (State Only)</option>
+                            <option value="NYC">New York City Resident</option>
+                            <option value="YONKERS">Yonkers Resident</option>
+                          </select>
+                          <p className="mt-1 text-xs text-slate-500">For local tax withholding</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
+                )}
+              </div>
+            </Tab.Panel>
 
-                  {watch401kType === 'PERCENT' && (
-                    <div className="md:col-span-2 animate-fade-in">
-                      <label className="block text-sm font-medium text-slate-700 mb-2">
-                        Contribution Rate (%) <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        {...register('retirement401kRate', {
-                          min: { value: 0, message: 'Cannot be negative' },
-                          max: { value: 100, message: 'Cannot exceed 100%' },
-                          setValueAs: value => value === '' ? null : Number(value),
-                          validate: value => {
-                            if (watch401kType === 'PERCENT' && (value === null || value === undefined)) {
-                              return 'Rate is required for percent-based contributions'
-                            }
-                            return true
-                          }
-                        })}
-                        className={classNames(
-                          'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
-                          errors.retirement401kRate
-                            ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
-                            : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
-                        )}
-                        placeholder="5.00"
-                      />
-                      {errors.retirement401kRate && (
-                        <p className="mt-1 text-sm text-rose-600">{errors.retirement401kRate.message}</p>
-                      )}
-                      <p className="mt-1 text-xs text-slate-500">Percentage of gross pay (e.g., 5% = 5.00)</p>
-                    </div>
-                  )}
-
-                  {watch401kType === 'FIXED' && (
-                    <div className="md:col-span-2 animate-fade-in">
-                      <label className="block text-sm font-medium text-slate-700 mb-2">
-                        Contribution Amount (per pay period) <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        {...register('retirement401kAmount', {
-                          min: { value: 0, message: 'Cannot be negative' },
-                          setValueAs: value => value === '' ? null : Number(value),
-                          validate: value => {
-                            if (watch401kType === 'FIXED' && (value === null || value === undefined)) {
-                              return 'Amount is required for flat contributions'
-                            }
-                            return true
-                          }
-                        })}
-                        className={classNames(
-                          'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
-                          errors.retirement401kAmount
-                            ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
-                            : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
-                        )}
-                        placeholder="200.00"
-                      />
-                      {errors.retirement401kAmount && (
-                        <p className="mt-1 text-sm text-rose-600">{errors.retirement401kAmount.message}</p>
-                      )}
-                      <p className="mt-1 text-xs text-slate-500">Fixed dollar amount deducted each pay period</p>
-                    </div>
-                  )}
-
-                  {!watch401kType && (
-                    <div className="md:col-span-2 text-center py-8">
-                      <Building2 className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                      <p className="text-sm text-slate-500">Select a contribution type to configure 401(k) deductions</p>
-                    </div>
-                  )}
+            {/* Retirement (401k) Tab */}
+            <Tab.Panel className="space-y-6 animate-fade-in">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Contribution Type
+                  </label>
+                  <select
+                    {...register('retirement401kType', {
+                      setValueAs: value => value === '' ? null : value
+                    })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:border-indigo-500 focus:ring-indigo-200"
+                  >
+                    <option value="">None</option>
+                    <option value="PERCENT">Percent of gross pay</option>
+                    <option value="FIXED">Flat amount per pay period</option>
+                  </select>
                 </div>
-              </Tab.Panel>
 
-              {/* Address Tab */}
-              <Tab.Panel className="space-y-6 animate-fade-in">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="md:col-span-2">
+                {watch401kType === 'PERCENT' && (
+                  <div className="md:col-span-2 animate-fade-in">
                     <label className="block text-sm font-medium text-slate-700 mb-2">
-                      Street Address <span className="text-rose-500">*</span>
+                      Contribution Rate (%) <span className="text-rose-500">*</span>
                     </label>
                     <input
-                      {...register('address', { required: 'Address is required' })}
-                      className={classNames(
-                        'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
-                        errors.address
-                          ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
-                          : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
-                      )}
-                      placeholder="123 Main Street"
-                    />
-                    {errors.address && (
-                      <p className="mt-1 text-sm text-rose-600">{errors.address.message}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                      City <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      {...register('city', { required: 'City is required' })}
-                      className={classNames(
-                        'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
-                        errors.city
-                          ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
-                          : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
-                      )}
-                      placeholder="San Francisco"
-                    />
-                    {errors.city && (
-                      <p className="mt-1 text-sm text-rose-600">{errors.city.message}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                      County {watchState === 'MD' && <span className="text-rose-500">*</span>}
-                    </label>
-                    <input
-                      {...register('county', {
+                      type="number"
+                      step="0.01"
+                      {...register('retirement401kRate', {
+                        min: { value: 0, message: 'Cannot be negative' },
+                        max: { value: 100, message: 'Cannot exceed 100%' },
+                        setValueAs: value => value === '' ? null : Number(value),
                         validate: value => {
-                          if (watchState === 'MD' && !value?.trim()) {
-                            return 'County is required for Maryland employees'
+                          if (watch401kType === 'PERCENT' && (value === null || value === undefined)) {
+                            return 'Rate is required for percent-based contributions'
                           }
                           return true
                         }
                       })}
                       className={classNames(
                         'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
-                        errors.county
+                        errors.retirement401kRate
                           ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
                           : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
                       )}
-                      placeholder={watchState === 'MD' ? 'Required for MD local tax' : 'Optional'}
+                      placeholder="5.00"
                     />
-                    {errors.county && (
-                      <p className="mt-1 text-sm text-rose-600">{errors.county.message}</p>
+                    {errors.retirement401kRate && (
+                      <p className="mt-1 text-sm text-rose-600">{errors.retirement401kRate.message}</p>
                     )}
-                    {watchState === 'MD' && (
-                      <p className="mt-1 text-xs text-amber-600">Required for Maryland local tax calculation</p>
-                    )}
+                    <p className="mt-1 text-xs text-slate-500">Percentage of gross pay (e.g., 5% = 5.00)</p>
                   </div>
+                )}
 
-                  <div>
+                {watch401kType === 'FIXED' && (
+                  <div className="md:col-span-2 animate-fade-in">
                     <label className="block text-sm font-medium text-slate-700 mb-2">
-                      State <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      {...register('state', { required: 'State is required' })}
-                      className={classNames(
-                        'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
-                        errors.state
-                          ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
-                          : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
-                      )}
-                    >
-                      <option value="">Select a state</option>
-                      {US_STATES.map(state => (
-                        <option key={state.code} value={state.code}>{state.name}</option>
-                      ))}
-                    </select>
-                    {errors.state && (
-                      <p className="mt-1 text-sm text-rose-600">{errors.state.message}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                      ZIP Code <span className="text-rose-500">*</span>
+                      Contribution Amount (per pay period) <span className="text-rose-500">*</span>
                     </label>
                     <input
-                      {...register('zipCode', { required: 'ZIP code is required' })}
+                      type="number"
+                      step="0.01"
+                      {...register('retirement401kAmount', {
+                        min: { value: 0, message: 'Cannot be negative' },
+                        setValueAs: value => value === '' ? null : Number(value),
+                        validate: value => {
+                          if (watch401kType === 'FIXED' && (value === null || value === undefined)) {
+                            return 'Amount is required for flat contributions'
+                          }
+                          return true
+                        }
+                      })}
                       className={classNames(
                         'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
-                        errors.zipCode
+                        errors.retirement401kAmount
                           ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
                           : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
                       )}
-                      placeholder="94102"
+                      placeholder="200.00"
                     />
-                    {errors.zipCode && (
-                      <p className="mt-1 text-sm text-rose-600">{errors.zipCode.message}</p>
+                    {errors.retirement401kAmount && (
+                      <p className="mt-1 text-sm text-rose-600">{errors.retirement401kAmount.message}</p>
                     )}
+                    <p className="mt-1 text-xs text-slate-500">Fixed dollar amount deducted each pay period</p>
                   </div>
+                )}
 
-                  {/* Work Location (Local Tax) */}
-                  <div className="md:col-span-2 mt-6">
-                    <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
-                      <MapPin className="w-4 h-4" />
-                      Work Location (for Local Tax)
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-2">Work City</label>
-                        <input
-                          {...register('workCity', {
-                            validate: value => {
-                              if (value?.trim() && !watchWorkState?.trim()) {
-                                return 'Work state is required when work city is provided'
-                              }
-                              return true
+                {!watch401kType && (
+                  <div className="md:col-span-2 text-center py-8">
+                    <Building2 className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                    <p className="text-sm text-slate-500">Select a contribution type to configure 401(k) deductions</p>
+                  </div>
+                )}
+              </div>
+            </Tab.Panel>
+
+            {/* Address Tab */}
+            <Tab.Panel className="space-y-6 animate-fade-in">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Street Address <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    {...register('address', { required: 'Address is required' })}
+                    className={classNames(
+                      'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
+                      errors.address
+                        ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
+                        : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
+                    )}
+                    placeholder="123 Main Street"
+                  />
+                  {errors.address && (
+                    <p className="mt-1 text-sm text-rose-600">{errors.address.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    City <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    {...register('city', { required: 'City is required' })}
+                    className={classNames(
+                      'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
+                      errors.city
+                        ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
+                        : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
+                    )}
+                    placeholder="San Francisco"
+                  />
+                  {errors.city && (
+                    <p className="mt-1 text-sm text-rose-600">{errors.city.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    County {watchState === 'MD' && <span className="text-rose-500">*</span>}
+                  </label>
+                  <input
+                    {...register('county', {
+                      validate: value => {
+                        if (watchState === 'MD' && !value?.trim()) {
+                          return 'County is required for Maryland employees'
+                        }
+                        return true
+                      }
+                    })}
+                    className={classNames(
+                      'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
+                      errors.county
+                        ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
+                        : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
+                    )}
+                    placeholder={watchState === 'MD' ? 'Required for MD local tax' : 'Optional'}
+                  />
+                  {errors.county && (
+                    <p className="mt-1 text-sm text-rose-600">{errors.county.message}</p>
+                  )}
+                  {watchState === 'MD' && (
+                    <p className="mt-1 text-xs text-amber-600">Required for Maryland local tax calculation</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    State <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    {...register('state', { required: 'State is required' })}
+                    className={classNames(
+                      'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
+                      errors.state
+                        ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
+                        : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
+                    )}
+                  >
+                    <option value="">Select a state</option>
+                    {US_STATES.map(state => (
+                      <option key={state.code} value={state.code}>{state.name}</option>
+                    ))}
+                  </select>
+                  {errors.state && (
+                    <p className="mt-1 text-sm text-rose-600">{errors.state.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    ZIP Code <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    {...register('zipCode', { required: 'ZIP code is required' })}
+                    className={classNames(
+                      'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
+                      errors.zipCode
+                        ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
+                        : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
+                    )}
+                    placeholder="94102"
+                  />
+                  {errors.zipCode && (
+                    <p className="mt-1 text-sm text-rose-600">{errors.zipCode.message}</p>
+                  )}
+                </div>
+
+                {/* Work Location (Local Tax) */}
+                <div className="md:col-span-2 mt-6">
+                  <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
+                    <MapPin className="w-4 h-4" />
+                    Work Location (for Local Tax)
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Work City</label>
+                      <input
+                        {...register('workCity', {
+                          validate: value => {
+                            if (value?.trim() && !watchWorkState?.trim()) {
+                              return 'Work state is required when work city is provided'
                             }
-                          })}
-                          className={classNames(
-                            'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
-                            errors.workCity
-                              ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
-                              : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
-                          )}
-                          placeholder="New York City"
-                        />
-                        {errors.workCity && (
-                          <p className="mt-1 text-sm text-rose-600">{errors.workCity.message}</p>
+                            return true
+                          }
+                        })}
+                        className={classNames(
+                          'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
+                          errors.workCity
+                            ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
+                            : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
                         )}
-                        <p className="mt-1 text-xs text-slate-500">For cities with local tax (NYC, Philadelphia, etc.)</p>
-                      </div>
+                        placeholder="New York City"
+                      />
+                      {errors.workCity && (
+                        <p className="mt-1 text-sm text-rose-600">{errors.workCity.message}</p>
+                      )}
+                      <p className="mt-1 text-xs text-slate-500">For cities with local tax (NYC, Philadelphia, etc.)</p>
+                    </div>
 
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-2">Work State</label>
-                        <select
-                          {...register('workState', {
-                            validate: value => {
-                              if (value?.trim() && !watchWorkCity?.trim()) {
-                                return 'Work city is required when work state is provided'
-                              }
-                              return true
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Work State</label>
+                      <select
+                        {...register('workState', {
+                          validate: value => {
+                            if (value?.trim() && !watchWorkCity?.trim()) {
+                              return 'Work city is required when work state is provided'
                             }
-                          })}
-                          className={classNames(
-                            'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
-                            errors.workState
-                              ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
-                              : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
-                          )}
-                        >
-                          <option value="">Select a state</option>
-                          {US_STATES.map(state => (
-                            <option key={state.code} value={state.code}>{state.name}</option>
-                          ))}
-                        </select>
-                        {errors.workState && (
-                          <p className="mt-1 text-sm text-rose-600">{errors.workState.message}</p>
+                            return true
+                          }
+                        })}
+                        className={classNames(
+                          'w-full px-3 py-2 border rounded-lg transition-colors focus:outline-none focus:ring-2',
+                          errors.workState
+                            ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-200'
+                            : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-200'
                         )}
-                      </div>
+                      >
+                        <option value="">Select a state</option>
+                        {US_STATES.map(state => (
+                          <option key={state.code} value={state.code}>{state.name}</option>
+                        ))}
+                      </select>
+                      {errors.workState && (
+                        <p className="mt-1 text-sm text-rose-600">{errors.workState.message}</p>
+                      )}
+                    </div>
 
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="checkbox"
-                          id="localResident"
-                          defaultChecked
-                          {...register('localResident')}
-                          className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <label htmlFor="localResident" className="text-sm text-slate-700 select-none">
-                          Resident of work city (affects local tax rates)
-                        </label>
-                      </div>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        id="localResident"
+                        defaultChecked
+                        {...register('localResident')}
+                        className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-200"
+                      />
+                      <label htmlFor="localResident" className="text-sm text-slate-700 select-none">
+                        Resident of work city (affects local tax rates)
+                      </label>
                     </div>
                   </div>
                 </div>
-              </Tab.Panel>
-            </Tab.Panels>
-          </Tab.Group>
-        </div>
-
-        {/* Form Actions */}
-        <div className="mt-6 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={() => navigate('/employees')}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
-          >
-            <X className="w-4 h-4" />
-            Cancel
-          </button>
-
-          <button
-            type="submit"
-            disabled={mutation.isPending}
-            className="flex items-center gap-2 px-6 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:bg-indigo-400 transition-colors shadow-sm hover:shadow-md"
-          >
-            <Save className="w-4 h-4" />
-            {mutation.isPending ? 'Saving...' : isEditing ? 'Update Employee' : 'Add Employee'}
-          </button>
-        </div>
-
-        {/* Error Message */}
-        {mutation.isError && (
-          <div className="mt-4 bg-rose-50 border border-rose-200 rounded-lg p-4 flex items-start gap-3 animate-fade-in">
-            <AlertCircle className="w-5 h-5 text-rose-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-rose-900">Failed to save employee</p>
-              <p className="text-sm text-rose-700 mt-1">Please check your information and try again.</p>
-            </div>
-          </div>
-        )}
-      </form>
+              </div>
+            </Tab.Panel>
+          </Tab.Panels>
+        </Tab.Group>
     </div>
+
+        {/* Form Actions */ }
+  <div className="mt-6 flex items-center justify-between">
+    <button
+      type="button"
+      onClick={() => navigate('/employees')}
+      className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+    >
+      <X className="w-4 h-4" />
+      Cancel
+    </button>
+
+    <button
+      type="submit"
+      disabled={mutation.isPending}
+      className="flex items-center gap-2 px-6 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:bg-indigo-400 transition-colors shadow-sm hover:shadow-md"
+    >
+      <Save className="w-4 h-4" />
+      {mutation.isPending ? 'Saving...' : isEditing ? 'Update Employee' : 'Add Employee'}
+    </button>
+  </div>
+
+  {/* Error Message */ }
+  {
+    mutation.isError && (
+      <div className="mt-4 bg-rose-50 border border-rose-200 rounded-lg p-4 flex items-start gap-3 animate-fade-in">
+        <AlertCircle className="w-5 h-5 text-rose-600 flex-shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-medium text-rose-900">Failed to save employee</p>
+          <p className="text-sm text-rose-700 mt-1">Please check your information and try again.</p>
+        </div>
+      </div>
+    )
+  }
+      </form >
+    </div >
   )
 }

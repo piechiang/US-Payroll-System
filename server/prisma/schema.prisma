@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -145,6 +145,9 @@ model Employee {
   workState String?
   workCity  String?
   localResident Boolean @default(true)
+
+  // State-specific tax configuration (e.g., CA children under 6, NY residency status)
+  customTaxProps String?
 
   // Direct Deposit (encrypted in application layer)
   bankRoutingNumber String? // Encrypted with AES-256-GCM
@@ -492,11 +495,11 @@ model TaxConfiguration {
   type          String   // "INCOME_TAX", "SDI", "SUTA", "FUTA", etc.
 
   // JSON fields for flexible configuration
-  brackets      Json?    // Tax brackets array for progressive taxes
-  rates         Json?    // Fixed rates (SS, Medicare, SDI, etc.)
-  deductions    Json?    // Standard deductions by filing status
-  caps          Json?    // Wage caps (SS wage base, SDI max, etc.)
-  credits       Json?    // Tax credits (dependent, EITC, etc.)
+  brackets      String?    // Tax brackets array for progressive taxes
+  rates         String?    // Fixed rates (SS, Medicare, SDI, etc.)
+  deductions    String?    // Standard deductions by filing status
+  caps          String?    // Wage caps (SS wage base, SDI max, etc.)
+  credits       String?    // Tax credits (dependent, EITC, etc.)
 
   // Metadata
   effectiveDate DateTime // When this config becomes active
@@ -546,10 +549,10 @@ model PayrollRun {
 
   // Error tracking
   errorMessage    String?  // Summary error message
-  errorDetails    Json?    // Detailed error log
+  errorDetails    String?    // Detailed error log
 
   // Results summary (populated on completion)
-  resultsSummary  Json?    // { totalGrossPay, totalNetPay, totalTaxes, etc. }
+  resultsSummary  String?    // { totalGrossPay, totalNetPay, totalTaxes, etc. }
 
   // Relations
   company  Company @relation(fields: [companyId], references: [id])

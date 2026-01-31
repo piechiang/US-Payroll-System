@@ -55,6 +55,7 @@ export interface StateTaxInput {
   filingStatus: string;
   payPeriodsPerYear: number;
   ytdGrossWages?: number;
+  stateSpecificArgs?: Record<string, any>; // Flexible args for state-specific logic (e.g. CA children, NY residency)
 }
 
 export interface StateTaxResult {

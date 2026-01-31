@@ -60,8 +60,12 @@ export function calculateNewYorkTax(input: StateTaxInput): StateTaxResult {
     grossPay,
     annualIncome,
     filingStatus,
-    payPeriodsPerYear
+    payPeriodsPerYear,
+    stateSpecificArgs
   } = input;
+
+  // Extract NY-specific args
+  const residencyStatus = stateSpecificArgs?.residencyStatus || 'NONE'; // NONE, NYC, YONKERS
 
   // Map filing status
   let nyFilingStatus = filingStatus;
